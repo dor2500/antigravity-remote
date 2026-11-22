@@ -26,6 +26,7 @@ export interface CliOptions {
   port?: number;
   workspace?: string;
   host?: string;
+  url?: string;
   name?: string;
   resetToken: boolean;
 }
@@ -45,6 +46,7 @@ export function parseCli(argv: string[]): CliOptions {
     port: Number.isInteger(port) && port > 0 && port < 65536 ? port : undefined,
     workspace: value("--workspace"),
     host: value("--host"),
+    url: value("--url"),
     name: value("--name"),
     resetToken: argv.includes("--reset-token"),
   };

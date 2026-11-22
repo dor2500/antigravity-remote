@@ -26,10 +26,12 @@
 
 ## Quick start
 
-1. **Start the bridge on Windows.** Clone this repository and double-click `start-bridge.bat`. The first run installs dependencies, builds the bridge, asks once (UAC) to open TCP port 8765 in Windows Firewall, and prints a QR code.
+1. **Start the bridge on Windows.** Clone this repository and double-click:
+   - `start-bridge-remote.bat` — **works from anywhere (4G/5G/any Wi-Fi)** via an automatic encrypted Cloudflare HTTPS tunnel (no VPN or router setup needed), or
+   - `start-bridge.bat` — local Wi-Fi / Tailscale mode.
 
    ```powershell
-   git clone https://github.com/dor2500/antigravity-remote; .\antigravity-remote\start-bridge.bat
+   git clone https://github.com/dor2500/antigravity-remote; .\antigravity-remote\start-bridge-remote.bat
    ```
 
 2. **Install the app on Android.** Download [`AntigravityRemote-latest.apk`](https://github.com/dor2500/antigravity-remote/releases/latest/download/AntigravityRemote-latest.apk) on the phone and open it. Allow installs from your browser if Android asks.

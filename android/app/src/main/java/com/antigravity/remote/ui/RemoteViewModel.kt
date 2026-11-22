@@ -110,13 +110,17 @@ class RemoteViewModel(application: Application) : AndroidViewModel(application) 
         client.connect(profile)
     }
 
-    /** Accepts the bridge QR payload: {"ip": "...", "port": 8765, "token": "..."}. */
+    /** Accepts the bridge QR payload: {"url": "https://...", "ip": "...", "port": 8765, "token": "..."}. */
     fun connectFromQrPayload(raw: String): Boolean {
         val profile = runCatching {
             val json = JSONObject(raw.trim())
+            val url = json.optString("url", "").trim()
+            val ip = json.optString("ip", "").trim()
+            val host = url.ifEmpty { ip }
+            val port = if (url.startsWith("https://", ignoreCase = true)) 443 else json.optInt("port", 8765)
             ConnectionProfile(
-                host = json.getString("ip").trim(),
-                port = json.optInt("port", 8765),
+                host = host,
+                port = port,
                 token = json.getString("token").trim()
             )
         }.getOrNull()

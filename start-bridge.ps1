@@ -4,6 +4,7 @@ param(
     [int]$Port = 8765,
     [string]$Workspace = "",
     [string]$Name = "",
+    [switch]$Tunnel,
     [switch]$ResetToken,
     [switch]$SkipFirewall
 )
@@ -89,11 +90,67 @@ if (-not $rule -and -not $SkipFirewall) {
     }
 }
 
-# 5. Start
+# 5. Optional Cloudflare Quick Tunnel for access from anywhere (HTTPS + WSS, no VPN or port forwarding needed)
+$tunnelProc = $null
+$tunnelUrl = ""
+$tunnelLog = $null
+if ($Tunnel) {
+    $cf = Get-Command cloudflared -ErrorAction SilentlyContinue
+    if (-not $cf) {
+        if (Get-Command winget -ErrorAction SilentlyContinue) {
+            Write-Step "cloudflared not found. Installing Cloudflare Tunnel CLI with winget..."
+            winget install --id Cloudflare.cloudflared --exact --silent --accept-package-agreements --accept-source-agreements
+            Update-SessionPath
+            $cf = Get-Command cloudflared -ErrorAction SilentlyContinue
+        }
+        if (-not $cf) {
+            Write-Host "[bridge] cloudflared is required for -Tunnel mode. Install it from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/" -ForegroundColor Red
+            exit 1
+        }
+    }
+    $tunnelLog = Join-Path $env:TEMP ("antigravity-tunnel-" + [guid]::NewGuid().ToString("N") + ".log")
+    Write-Step "Starting Cloudflare HTTPS tunnel to http://127.0.0.1:$Port ..."
+    $tunnelProc = Start-Process -FilePath $cf.Source `
+        -ArgumentList @("tunnel", "--url", "http://127.0.0.1:$Port", "--no-autoupdate") `
+        -RedirectStandardError $tunnelLog `
+        -PassThru -WindowStyle Hidden
+
+    $deadline = (Get-Date).AddSeconds(25)
+    while ((Get-Date) -lt $deadline) {
+        if ($tunnelProc.HasExited) {
+            Write-Warn "cloudflared exited early (code $($tunnelProc.ExitCode)). Falling back to LAN mode."
+            break
+        }
+        if (Test-Path $tunnelLog) {
+            $rawLog = Get-Content $tunnelLog -Raw -ErrorAction SilentlyContinue
+            if ($rawLog -match "https://[a-z0-9-]+\.trycloudflare\.com") {
+                $tunnelUrl = $Matches[0]
+                Write-Step "Remote HTTPS tunnel ready: $tunnelUrl"
+                break
+            }
+        }
+        Start-Sleep -Milliseconds 400
+    }
+    if (-not $tunnelUrl) {
+        Write-Warn "Could not obtain a trycloudflare.com URL in time. Starting in LAN mode."
+    }
+}
+
+# 6. Start
 $nodeArgs = @("dist\index.js", "--port", "$Port")
 if ($Workspace) { $nodeArgs += @("--workspace", $Workspace) }
 if ($Name) { $nodeArgs += @("--name", $Name) }
+if ($tunnelUrl) { $nodeArgs += @("--url", $tunnelUrl) }
 if ($ResetToken) { $nodeArgs += "--reset-token" }
 Write-Step "Starting bridge on port $Port..."
-& node @nodeArgs
-exit $LASTEXITCODE
+try {
+    & node @nodeArgs
+    exit $LASTEXITCODE
+} finally {
+    if ($tunnelProc -and -not $tunnelProc.HasExited) {
+        Stop-Process -Id $tunnelProc.Id -Force -ErrorAction SilentlyContinue
+    }
+    if ($tunnelLog -and (Test-Path $tunnelLog)) {
+        Remove-Item -Force -ErrorAction SilentlyContinue $tunnelLog
+    }
+}

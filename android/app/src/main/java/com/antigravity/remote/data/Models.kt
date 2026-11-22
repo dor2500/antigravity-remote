@@ -23,10 +23,42 @@ data class ConnectionProfile(
     val port: Int,
     val token: String
 ) {
-    private val hostPart: String get() = if (host.contains(':') && !host.startsWith("[")) "[$host]" else host
-    val baseUrl: String get() = "http://$hostPart:$port"
-    val wsUrl: String get() = "ws://$hostPart:$port/ws?token=${URLEncoder.encode(token, "UTF-8")}"
-    val label: String get() = "$host:$port"
+    val isHttps: Boolean
+        get() = host.trim().startsWith("https://", ignoreCase = true) ||
+            (!host.trim().startsWith("http://", ignoreCase = true) && port == 443)
+
+    private val normalizedBase: String
+        get() {
+            val trimmed = host.trim().trimEnd('/')
+            if (trimmed.startsWith("https://", ignoreCase = true) || trimmed.startsWith("http://", ignoreCase = true)) {
+                return trimmed
+            }
+            val hostPart = if (trimmed.contains(':') && !trimmed.startsWith("[")) "[$trimmed]" else trimmed
+            return if (port == 443) "https://$hostPart" else "http://$hostPart:$port"
+        }
+
+    val baseUrl: String get() = normalizedBase
+
+    val wsUrl: String
+        get() {
+            val wsBase = when {
+                normalizedBase.startsWith("https://", ignoreCase = true) -> "wss://" + normalizedBase.substring(8)
+                normalizedBase.startsWith("http://", ignoreCase = true) -> "ws://" + normalizedBase.substring(7)
+                else -> "ws://$normalizedBase"
+            }
+            return "$wsBase/ws?token=${URLEncoder.encode(token, "UTF-8")}"
+        }
+
+    val label: String
+        get() {
+            val trimmed = host.trim().trimEnd('/')
+            return when {
+                trimmed.startsWith("https://", ignoreCase = true) -> trimmed.substring(8)
+                trimmed.startsWith("http://", ignoreCase = true) -> trimmed.substring(7)
+                port == 443 -> trimmed
+                else -> "$trimmed:$port"
+            }
+        }
 }
 
 data class LogEntry(

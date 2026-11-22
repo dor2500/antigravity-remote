@@ -314,14 +314,22 @@ async function start(): Promise<void> {
 }
 
 function printBanner(): void {
-  const payload = JSON.stringify({ ip: advertisedHost, port: config.port, token: config.token });
+  const publicUrl = cli.url?.trim().replace(/\/+$/, "");
+  const payload = JSON.stringify(
+    publicUrl
+      ? { url: publicUrl, ip: advertisedHost, port: config.port, token: config.token }
+      : { ip: advertisedHost, port: config.port, token: config.token }
+  );
   const line = "=".repeat(64);
   console.log("");
   console.log(line);
   console.log(`  ANTIGRAVITY REMOTE BRIDGE v${VERSION}`);
   console.log(line);
   console.log(`  Host        ${config.displayName || os.hostname()}`);
-  console.log(`  Address     ${advertisedHost}:${config.port}`);
+  if (publicUrl) {
+    console.log(`  Remote URL  ${publicUrl} (HTTPS - works from anywhere)`);
+  }
+  console.log(`  LAN Address ${advertisedHost}:${config.port}`);
   const others = addresses.filter((a) => a.address !== advertisedHost);
   if (others.length > 0) {
     console.log(`  Also on     ${others.map((a) => `${a.address} (${a.name})`).join(", ")}`);
@@ -335,7 +343,11 @@ function printBanner(): void {
   console.log("  Scan this code with the Antigravity Remote app:");
   console.log("");
   qrcode.generate(payload, { small: true }, (code) => console.log(code));
-  console.log(`  Manual entry: ${advertisedHost}  port ${config.port}  token above`);
+  if (publicUrl) {
+    console.log(`  Manual entry: ${publicUrl}  token above`);
+  } else {
+    console.log(`  Manual entry: ${advertisedHost}  port ${config.port}  token above`);
+  }
   console.log("  Press Ctrl+C to stop.");
   console.log(line);
 }

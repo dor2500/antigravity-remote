@@ -216,8 +216,8 @@ fun ConnectionScreen(
             OutlinedTextField(
                 value = host,
                 onValueChange = { host = it },
-                label = { Text("Host / LAN IP / Tailscale IP") },
-                placeholder = { Text("192.168.1.42") },
+                label = { Text("Host / HTTPS URL / LAN / Tailscale IP") },
+                placeholder = { Text("https://...trycloudflare.com or 192.168.1.42") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -314,9 +314,9 @@ private fun PairingHint() {
     ) {
         Text("How to pair", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
         listOf(
-            "1. On the PC, double-click start-bridge.bat",
+            "1. On the PC, double-click start-bridge-remote.bat (works from anywhere) or start-bridge.bat (LAN)",
             "2. Tap Scan Bridge QR Code and point at the code it prints",
-            "3. Away from home? Use the PC's Tailscale or VPN address as the host"
+            "3. Supports HTTPS tunnels, LAN Wi-Fi, and Tailscale / VPN"
         ).forEach {
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
