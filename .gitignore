@@ -1,0 +1,17 @@
+# Node / Bridge
+bridge/node_modules/
+bridge/dist/
+bridge/.bridge-config.json
+
+# Android / Gradle
+android/.gradle/
+android/local.properties
+android/app/build/
+android/build/
+android/.idea/
+*.iml
+*.apk
+*.aab
+*.keystore
+*.jks
+dist/
