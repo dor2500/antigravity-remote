@@ -2,6 +2,7 @@
 bridge/node_modules/
 bridge/dist/
 bridge/.bridge-config.json
+.antigravity-remote-prompt.md
 
 # Android / Gradle
 android/.gradle/
