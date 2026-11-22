@@ -300,7 +300,7 @@ export class AgentSession {
     await this.request("initialize", {
       protocolVersion: 1,
       clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-      clientInfo: { name: "antigravity-remote-bridge", version: "1.3.0" },
+      clientInfo: { name: "antigravity-remote-bridge", version: "1.3.1" },
     });
     this.procCwd = workspace;
   }

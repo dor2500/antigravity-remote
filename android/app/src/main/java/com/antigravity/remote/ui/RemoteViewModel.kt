@@ -301,9 +301,15 @@ class RemoteViewModel(application: Application) : AndroidViewModel(application) 
 
     /** Downloads the newer APK, verifies its checksum and opens the Android installer. */
     fun installUpdate() {
-        val available = _uiState.value.update as? UpdateChecker.State.Available ?: return
+        // Also reachable after Android's "install unknown apps" screen or a failed download.
+        val release = when (val state = _uiState.value.update) {
+            is UpdateChecker.State.Available -> state.release
+            is UpdateChecker.State.NeedsPermission -> state.release
+            is UpdateChecker.State.Failed -> state.release
+            else -> null
+        } ?: return
         viewModelScope.launch {
-            updater.downloadAndInstall(available.release) { state -> _uiState.update { it.copy(update = state) } }
+            updater.downloadAndInstall(release) { state -> _uiState.update { it.copy(update = state) } }
         }
     }
 
