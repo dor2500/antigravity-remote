@@ -1,0 +1,132 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: bridge/package-lock.json
+
+      - name: Build bridge (type check)
+        working-directory: bridge
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
+      # Uses the release key from repository secrets so every build can update the previous
+      # install. Forks without the secrets get a throwaway key generated for this run only.
+      - name: Prepare signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          keystore="$RUNNER_TEMP/release.jks"
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 --decode > "$keystore"
+            {
+              echo "ANDROID_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+              echo "ANDROID_KEY_ALIAS=$KEY_ALIAS"
+              echo "ANDROID_KEY_PASSWORD=$KEY_PASSWORD"
+            } >> "$GITHUB_ENV"
+          else
+            echo "::warning::Signing secrets are not set; signing with a key generated for this run."
+            password="$(openssl rand -hex 24)"
+            echo "::add-mask::$password"
+            keytool -genkeypair -keystore "$keystore" -storetype PKCS12 -alias ci -keyalg RSA -keysize 2048 \
+              -validity 10000 -storepass "$password" -keypass "$password" -dname "CN=Antigravity Remote CI"
+            {
+              echo "ANDROID_KEYSTORE_PASSWORD=$password"
+              echo "ANDROID_KEY_ALIAS=ci"
+              echo "ANDROID_KEY_PASSWORD=$password"
+            } >> "$GITHUB_ENV"
+          fi
+          echo "ANDROID_KEYSTORE_PATH=$keystore" >> "$GITHUB_ENV"
+
+      - name: Build APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Verify signature and rename
+        run: |
+          apk="android/app/build/outputs/apk/release/app-release.apk"
+          apksigner="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -n 1)apksigner"
+          "$apksigner" verify --print-certs "$apk"
+          mkdir -p dist
+          cp "$apk" dist/AntigravityRemote-latest.apk
+          (cd dist && sha256sum AntigravityRemote-latest.apk > AntigravityRemote-latest.apk.sha256)
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AntigravityRemote-apk
+          path: dist/*
+
+      - name: Publish versioned release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Antigravity Remote ${{ github.ref_name }}
+          generate_release_notes: true
+          make_latest: true
+          files: |
+            dist/AntigravityRemote-latest.apk
+            dist/AntigravityRemote-latest.apk.sha256
+
+      - name: Move the rolling "latest" tag to this commit
+        if: github.ref == 'refs/heads/main'
+        run: |
+          git tag -f latest "$GITHUB_SHA"
+          git push -f origin refs/tags/latest
+
+      - name: Publish rolling development build
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Development build (main)
+          body: |
+            Built automatically from the latest commit on main (${{ github.sha }}).
+            For the stable version, use the release marked Latest.
+          prerelease: true
+          make_latest: false
+          files: |
+            dist/AntigravityRemote-latest.apk
+            dist/AntigravityRemote-latest.apk.sha256
