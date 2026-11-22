@@ -1,13 +1,17 @@
 # Antigravity Remote - bridge launcher for Windows.
-# Installs Node.js dependencies, builds the bridge, opens the firewall port and starts the server.
+# Updates itself from GitHub, installs what it needs, opens a tunnel so the phone works from
+# anywhere, and starts the bridge. Double-click start-bridge.bat to run it.
 param(
     [int]$Port = 8765,
     [string]$Workspace = "",
     [string]$Name = "",
     [string]$PublicUrl = "",
-    [switch]$Tunnel,
+    [switch]$NoTunnel,
+    [switch]$NoUpdate,
     [switch]$ResetToken,
-    [switch]$SkipFirewall
+    [switch]$SkipFirewall,
+    # Kept so older shortcuts keep working; the tunnel is on by default now.
+    [switch]$Tunnel
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,7 +28,24 @@ function Update-SessionPath {
     $env:Path = "$machine;$user"
 }
 
-# 1. Node.js 18 or newer
+# 1. Update from GitHub (only for a git clone with no local changes)
+if (-not $NoUpdate -and (Test-Path (Join-Path $RepoDir ".git")) -and (Get-Command git -ErrorAction SilentlyContinue)) {
+    $dirty = & git -C $RepoDir status --porcelain --untracked-files=no 2>$null
+    if ($dirty) {
+        Write-Warn "Local changes found; skipping the automatic update."
+    } else {
+        Write-Step "Checking GitHub for updates..."
+        $before = & git -C $RepoDir rev-parse HEAD 2>$null
+        & git -C $RepoDir pull --ff-only --quiet 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warn "Could not update (offline?). Starting the current version."
+        } elseif ((& git -C $RepoDir rev-parse HEAD 2>$null) -ne $before) {
+            Write-Step "Updated to the latest version."
+        }
+    }
+}
+
+# 2. Node.js 18 or newer
 $node = Get-Command node -ErrorAction SilentlyContinue
 if (-not $node) {
     if (Get-Command winget -ErrorAction SilentlyContinue) {
@@ -46,7 +67,7 @@ if ($nodeMajor -lt 18) {
 
 Set-Location $BridgeDir
 
-# 2. Dependencies (reinstalled when package-lock.json changes)
+# 3. Dependencies (reinstalled when package-lock.json changes)
 $lockFile = Join-Path $BridgeDir "package-lock.json"
 $stampFile = Join-Path $BridgeDir "node_modules\.install-stamp"
 $needInstall = -not (Test-Path $stampFile)
@@ -60,7 +81,7 @@ if ($needInstall) {
     New-Item -ItemType File -Force -Path $stampFile | Out-Null
 }
 
-# 3. Build when sources are newer than the compiled output
+# 4. Build when sources are newer than the compiled output
 $entry = Join-Path $BridgeDir "dist\index.js"
 $needBuild = -not (Test-Path $entry)
 if (-not $needBuild) {
@@ -74,77 +95,72 @@ if ($needBuild) {
     if ($LASTEXITCODE -ne 0) { Write-Host "[bridge] Build failed." -ForegroundColor Red; exit 1 }
 }
 
-# 4. Firewall rule (needs one UAC prompt the first time). Limited to the local subnet and Tailscale.
+# 5. Firewall rule for the home network (one UAC prompt the first time). Local subnet and Tailscale only.
 $rule = Get-NetFirewallRule -DisplayName $RuleName -ErrorAction SilentlyContinue
 if (-not $rule -and -not $SkipFirewall) {
-    Write-Step "Opening Windows Firewall port $Port (approve the UAC prompt)..."
+    Write-Step "Opening Windows Firewall port $Port for your home network (approve the UAC prompt)..."
     $ruleCommand = "New-NetFirewallRule -DisplayName '$RuleName' -Direction Inbound -Action Allow -Protocol TCP -LocalPort $Port -RemoteAddress LocalSubnet,100.64.0.0/10 -Profile Any | Out-Null"
     try {
         $elevated = Start-Process powershell.exe -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList @("-NoProfile", "-Command", $ruleCommand)
         if ($elevated.ExitCode -eq 0) {
             Write-Step "Firewall rule added."
         } else {
-            Write-Warn "Firewall rule was not added (exit $($elevated.ExitCode)). The phone may not be able to connect."
+            Write-Warn "Firewall rule was not added (exit $($elevated.ExitCode)). At home the phone may not connect directly; the tunnel still works."
         }
     } catch {
-        Write-Warn "Firewall rule skipped: $($_.Exception.Message). Run this script again and accept the UAC prompt if the phone cannot connect."
+        Write-Warn "Firewall rule skipped: $($_.Exception.Message)."
     }
 }
 
-# 5. Optional Cloudflare Quick Tunnel for access from anywhere (HTTPS + WSS, no VPN or port forwarding needed)
+# 6. Cloudflare quick tunnel: an https address that reaches this PC from anywhere,
+#    with no account, VPN or router setup. The phone learns each new address by itself.
 $tunnelProc = $null
 $tunnelUrl = ""
 $tunnelLog = $null
-if ($Tunnel) {
+if (-not $NoTunnel -and -not $PublicUrl) {
     $cf = Get-Command cloudflared -ErrorAction SilentlyContinue
-    if (-not $cf) {
-        if (Get-Command winget -ErrorAction SilentlyContinue) {
-            Write-Step "cloudflared not found. Installing Cloudflare Tunnel CLI with winget..."
-            winget install --id Cloudflare.cloudflared --exact --silent --accept-package-agreements --accept-source-agreements
-            Update-SessionPath
-            $cf = Get-Command cloudflared -ErrorAction SilentlyContinue
-        }
+    if (-not $cf -and (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Write-Step "Installing Cloudflare Tunnel (cloudflared) for access from anywhere..."
+        winget install --id Cloudflare.cloudflared --exact --silent --accept-package-agreements --accept-source-agreements | Out-Null
+        Update-SessionPath
+        $cf = Get-Command cloudflared -ErrorAction SilentlyContinue
         if (-not $cf) {
-            Write-Host "[bridge] cloudflared is required for -Tunnel mode. Install it from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/" -ForegroundColor Red
-            exit 1
+            $installed = Get-ChildItem "$env:ProgramFiles*\cloudflared\cloudflared.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($installed) { $cf = Get-Command $installed.FullName }
         }
     }
-    $tunnelLog = Join-Path $env:TEMP ("antigravity-tunnel-" + [guid]::NewGuid().ToString("N") + ".log")
-    Write-Step "Starting Cloudflare HTTPS tunnel to http://127.0.0.1:$Port ..."
-    $tunnelProc = Start-Process -FilePath $cf.Source `
-        -ArgumentList @("tunnel", "--url", "http://127.0.0.1:$Port", "--no-autoupdate") `
-        -RedirectStandardError $tunnelLog `
-        -PassThru -WindowStyle Hidden
-
-    $deadline = (Get-Date).AddSeconds(25)
-    while ((Get-Date) -lt $deadline) {
-        if ($tunnelProc.HasExited) {
-            Write-Warn "cloudflared exited early (code $($tunnelProc.ExitCode)). Falling back to LAN mode."
-            break
-        }
-        if (Test-Path $tunnelLog) {
+    if (-not $cf) {
+        Write-Warn "cloudflared is not available, so the phone will only connect at home or over Tailscale."
+    } else {
+        $tunnelLog = Join-Path $env:TEMP ("antigravity-tunnel-" + [guid]::NewGuid().ToString("N") + ".log")
+        Write-Step "Opening the tunnel..."
+        $tunnelProc = Start-Process -FilePath $cf.Source `
+            -ArgumentList @("tunnel", "--url", "http://127.0.0.1:$Port", "--no-autoupdate") `
+            -RedirectStandardError $tunnelLog `
+            -PassThru -WindowStyle Hidden
+        $deadline = (Get-Date).AddSeconds(30)
+        while ((Get-Date) -lt $deadline) {
+            if ($tunnelProc.HasExited) { break }
             $rawLog = Get-Content $tunnelLog -Raw -ErrorAction SilentlyContinue
             if ($rawLog -match "https://[a-z0-9-]+\.trycloudflare\.com") {
                 $tunnelUrl = $Matches[0]
-                Write-Step "Remote HTTPS tunnel ready: $tunnelUrl"
                 break
             }
+            Start-Sleep -Milliseconds 400
         }
-        Start-Sleep -Milliseconds 400
-    }
-    if (-not $tunnelUrl) {
-        Write-Warn "Could not obtain a trycloudflare.com URL in time. Starting in LAN mode."
+        if (-not $tunnelUrl) {
+            Write-Warn "The tunnel did not start, so the phone will only connect at home or over Tailscale."
+        }
     }
 }
 
-# 6. Start
+# 7. Start
 $nodeArgs = @("dist\index.js", "--port", "$Port")
 if ($Workspace) { $nodeArgs += @("--workspace", $Workspace) }
 if ($Name) { $nodeArgs += @("--name", $Name) }
 if ($tunnelUrl) { $nodeArgs += @("--url", $tunnelUrl) }
 elseif ($PublicUrl) { $nodeArgs += @("--url", $PublicUrl) }
 if ($ResetToken) { $nodeArgs += "--reset-token" }
-Write-Step "Starting bridge on port $Port..."
 try {
     & node @nodeArgs
     exit $LASTEXITCODE

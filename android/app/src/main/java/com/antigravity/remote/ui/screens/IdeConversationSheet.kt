@@ -1,5 +1,7 @@
 package com.antigravity.remote.ui.screens
 
+import androidx.compose.ui.res.stringResource
+import com.antigravity.remote.R
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -66,14 +68,14 @@ fun IdeConversationSheet(
         Column(modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 12.dp)) {
             Row(modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("IDE conversations", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text(stringResource(R.string.ide_sheet_title), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                     Text(
-                        "Follow a conversation from Antigravity IDE live and reply from the phone.",
+                        stringResource(R.string.ide_sheet_subtitle),
                         color = TextSecondary,
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
-                IconButton(onClick = onRefresh) { Icon(Icons.Default.Refresh, contentDescription = "Refresh") }
+                IconButton(onClick = onRefresh) { Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.refresh)) }
             }
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
@@ -82,13 +84,13 @@ fun IdeConversationSheet(
                 OutlinedTextField(
                     value = newPrompt,
                     onValueChange = { newPrompt = it },
-                    placeholder = { Text("Start a new IDE conversation...") },
+                    placeholder = { Text(stringResource(R.string.ide_new_hint)) },
                     maxLines = 4,
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(14.dp)
                 )
                 IconButton(onClick = { if (newPrompt.isNotBlank()) onNew(newPrompt) }, enabled = newPrompt.isNotBlank()) {
-                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Start conversation", tint = if (newPrompt.isNotBlank()) AccentBlue else TextSecondary)
+                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(R.string.ide_new_start), tint = if (newPrompt.isNotBlank()) AccentBlue else TextSecondary)
                 }
             }
             if (uiState.ideConversationsLoading && uiState.ideConversations.isEmpty()) {
@@ -97,7 +99,7 @@ fun IdeConversationSheet(
                 }
             } else if (uiState.ideConversations.isEmpty()) {
                 Text(
-                    "No conversations found. Is Antigravity IDE running on the PC?",
+                    stringResource(R.string.ide_none),
                     color = TextSecondary,
                     modifier = Modifier.padding(20.dp)
                 )
@@ -132,7 +134,10 @@ private fun ConversationRow(conversation: IdeConversation, active: Boolean, onCl
                 val running = conversation.status == "running" || conversation.status == "busy"
                 if (running) StatusDot(StatusGreen, Modifier.size(6.dp))
                 Text(
-                    text = listOfNotNull(if (running) "running" else null, relativeTime(conversation.updatedAt)).joinToString("  -  "),
+                    text = listOfNotNull(
+                        if (running) stringResource(R.string.ide_running) else null,
+                        relativeTime(conversation.updatedAt)
+                    ).joinToString("  -  "),
                     color = TextSecondary,
                     style = MaterialTheme.typography.bodySmall
                 )
@@ -141,13 +146,14 @@ private fun ConversationRow(conversation: IdeConversation, active: Boolean, onCl
     }
 }
 
+@Composable
 private fun relativeTime(iso: String): String? {
     val then = runCatching { Instant.parse(iso) }.getOrNull() ?: return null
-    val minutes = Duration.between(then, Instant.now()).toMinutes()
+    val minutes = Duration.between(then, Instant.now()).toMinutes().toInt()
     return when {
-        minutes < 1 -> "just now"
-        minutes < 60 -> "$minutes min ago"
-        minutes < 60 * 24 -> "${minutes / 60} h ago"
-        else -> "${minutes / (60 * 24)} d ago"
+        minutes < 1 -> stringResource(R.string.time_just_now)
+        minutes < 60 -> stringResource(R.string.time_minutes, minutes)
+        minutes < 60 * 24 -> stringResource(R.string.time_hours, minutes / 60)
+        else -> stringResource(R.string.time_days, minutes / (60 * 24))
     }
 }

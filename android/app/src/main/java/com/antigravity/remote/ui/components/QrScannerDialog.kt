@@ -1,5 +1,7 @@
 package com.antigravity.remote.ui.components
 
+import androidx.compose.ui.res.stringResource
+import com.antigravity.remote.R
 import android.util.Size
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ExperimentalGetImage
@@ -96,9 +98,9 @@ fun QrScannerDialog(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Scan pairing code", style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(R.string.scan_title), style = MaterialTheme.typography.titleMedium)
                     IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.Close, contentDescription = "Close scanner")
+                        Icon(Icons.Default.Close, contentDescription = stringResource(R.string.close_scanner))
                     }
                 }
 
@@ -150,7 +152,7 @@ fun QrScannerDialog(
                                     provider.unbindAll()
                                     provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
                                 } catch (e: Exception) {
-                                    cameraError = "Camera unavailable: ${e.message ?: e.javaClass.simpleName}"
+                                    cameraError = context.getString(R.string.camera_unavailable, e.message ?: e.javaClass.simpleName)
                                 }
                             }, ContextCompat.getMainExecutor(ctx))
                             previewView
@@ -173,7 +175,7 @@ fun QrScannerDialog(
                 }
 
                 Text(
-                    text = "Point the camera at the QR code printed by start-bridge.bat",
+                    text = stringResource(R.string.scan_hint),
                     style = MaterialTheme.typography.bodyMedium,
                     color = TextSecondary,
                     textAlign = TextAlign.Center,

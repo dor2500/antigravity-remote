@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Connection screen -->
+    <string name="connect_subtitle">שליטה ב-Antigravity שבמחשב שלך מהטלפון</string>
+    <string name="saved_bridge">המחשב שלך</string>
+    <string name="forget_saved_bridge">שכח את המחשב הזה</string>
+    <string name="reconnect">התחבר</string>
+    <string name="scan_qr">סרוק את קוד ה-QR</string>
+    <string name="enter_manually">הזנת כתובת ידנית</string>
+    <string name="field_host">כתובת המחשב</string>
+    <string name="field_host_hint">192.168.1.42 או https://...</string>
+    <string name="field_port">פורט</string>
+    <string name="field_token">טוקן</string>
+    <string name="connecting_ellipsis">מתחבר...</string>
+    <string name="connect">התחבר</string>
+    <string name="how_to_pair">איך מתחברים</string>
+    <string name="pair_step_1">1. במחשב, לחץ פעמיים על start-bridge.bat</string>
+    <string name="pair_step_2">2. הקש על \"סרוק את קוד ה-QR\" וכוון את המצלמה לקוד שבחלון שנפתח</string>
+    <string name="pair_step_3">3. זהו. מעכשיו האפליקציה מוצאת את המחשב לבד, בבית ומחוץ לבית</string>
+    <string name="scan_title">סריקת קוד QR</string>
+    <string name="close_scanner">סגור סורק</string>
+    <string name="camera_unavailable">המצלמה לא זמינה: %1$s</string>
+    <string name="scan_hint">כוון את המצלמה לקוד ה-QR שבחלון ה-bridge במחשב</string>
+    <string name="error_bad_qr">זה לא קוד QR של Antigravity Remote</string>
+    <string name="update_open">עדכן</string>
+
+    <!-- Connection errors -->
+    <string name="error_unreachable">אין חיבור למחשב. ודא ש-start-bridge.bat פועל.</string>
+    <string name="error_timeout">המחשב לא ענה בזמן</string>
+    <string name="error_unknown_host">כתובת לא מוכרת</string>
+    <string name="error_token">המחשב לא אישר את הטלפון הזה. סרוק את קוד ה-QR מחדש.</string>
+    <string name="error_locked_out">יותר מדי ניסיונות כושלים. נסה שוב בעוד 10 דקות.</string>
+    <string name="error_no_route">אין חיבור למחשב כרגע. מנסה שוב...</string>
+    <string name="error_not_connected">לא מחובר</string>
+
+    <!-- Status bar -->
+    <string name="status_connected">מחובר</string>
+    <string name="status_connecting">מתחבר</string>
+    <string name="status_reconnecting">מתחבר מחדש</string>
+    <string name="status_disconnected">מנותק</string>
+    <string name="via_route">דרך %1$s</string>
+    <string name="route_lan">הרשת הביתית</string>
+    <string name="route_tailscale">Tailscale</string>
+    <string name="route_internet">האינטרנט</string>
+    <string name="choose_workspace">בחר פרויקט</string>
+    <string name="switch_workspace">החלף פרויקט</string>
+    <string name="disconnect">התנתק</string>
+    <string name="settings">הגדרות</string>
+    <string name="agent_none">אין סוכן</string>
+    <string name="agent_ready">מוכן</string>
+    <string name="agent_offline">כבוי</string>
+    <string name="agent_starting">מתחיל</string>
+    <string name="agent_idle">ממתין</string>
+    <string name="agent_working">עובד</string>
+    <string name="agent_needs_approval">צריך אישור</string>
+    <string name="agent_error">שגיאה</string>
+
+    <!-- Tabs -->
+    <string name="tab_agent">סוכן</string>
+    <string name="tab_terminal">טרמינל</string>
+    <string name="tab_files">קבצים</string>
+
+    <!-- Agent tab -->
+    <string name="ide_badge">IDE</string>
+    <string name="agent_default_title">סוכן Antigravity</string>
+    <string name="agent_sub_ide">בשידור חי מ-Antigravity IDE. ההודעות שלך נשלחות לשיחה הזו.</string>
+    <string name="agent_sub_no_cli">ה-CLI של Antigravity (agy) לא נמצא במחשב</string>
+    <string name="agent_sub_hint">התחל ב-! כדי להריץ פקודה במחשב</string>
+    <plurals name="agent_queued">
+        <item quantity="one">הודעה אחת ממתינה</item>
+        <item quantity="two">%d הודעות ממתינות</item>
+        <item quantity="many">%d הודעות ממתינות</item>
+        <item quantity="other">%d הודעות ממתינות</item>
+    </plurals>
+    <string name="copy_output">העתק הכל</string>
+    <string name="label_output">הפלט</string>
+    <string name="label_message">ההודעה</string>
+    <string name="agent_empty">כתוב לסוכן של Antigravity שבמחשב שלך. התשובות שלו, הפקודות שהוא מריץ ובקשות האישור שלו יופיעו כאן בזמן אמת.</string>
+    <string name="prompt_hint">כתוב לסוכן...</string>
+    <string name="prompt_hint_busy">הוסף הודעת המשך...</string>
+    <string name="send_prompt">שלח</string>
+    <string name="session_options">עוד</string>
+    <string name="menu_ide_conversations">שיחות IDE</string>
+    <string name="menu_ide_conversations_off">שיחות IDE (ה-IDE לא פתוח)</string>
+    <string name="menu_leave_ide">צא משיחת ה-IDE</string>
+    <string name="menu_new_session">שיחה חדשה</string>
+    <string name="menu_retry">שלח שוב את ההודעה האחרונה</string>
+    <string name="permission_title">הסוכן רוצה %1$s</string>
+    <string name="verb_execute">להריץ פקודה</string>
+    <string name="verb_edit">לערוך קובץ</string>
+    <string name="verb_delete">למחוק קובץ</string>
+    <string name="verb_fetch">לפתוח כתובת אינטרנט</string>
+    <string name="verb_read">לקרוא קובץ</string>
+    <string name="verb_other">לבצע פעולה</string>
+    <string name="approve">אשר</string>
+    <string name="reject">דחה</string>
+    <string name="stop">עצור</string>
+    <string name="clear">נקה</string>
+    <string name="jump_to_latest">לסוף</string>
+    <string name="show_less">הצג פחות</string>
+    <string name="show_all_lines">הצג את כל %1$d השורות</string>
+    <string name="copied">%1$s הועתק</string>
+
+    <!-- IDE conversations -->
+    <string name="ide_sheet_title">שיחות IDE</string>
+    <string name="ide_sheet_subtitle">בחר שיחה מ-Antigravity IDE כדי לעקוב אחריה בזמן אמת ולענות מהטלפון.</string>
+    <string name="ide_new_hint">פתח שיחת IDE חדשה...</string>
+    <string name="ide_new_start">התחל</string>
+    <string name="ide_none">לא נמצאו שיחות. האם Antigravity IDE פתוח במחשב?</string>
+    <string name="ide_running">פועלת</string>
+    <string name="time_just_now">עכשיו</string>
+    <string name="time_minutes">לפני %1$d דק\'</string>
+    <string name="time_hours">לפני %1$d שע\'</string>
+    <string name="time_days">לפני %1$d ימים</string>
+    <string name="refresh">רענן</string>
+
+    <!-- Terminal tab -->
+    <string name="terminal_ready">מוכן</string>
+    <string name="terminal_running">רץ: %1$s</string>
+    <string name="copy_terminal">העתק את פלט הטרמינל</string>
+    <string name="label_terminal_output">פלט הטרמינל</string>
+    <string name="label_line">השורה</string>
+    <string name="clear_terminal">נקה טרמינל</string>
+    <string name="terminal_empty">הפקודות רצות ב-PowerShell בתיקיית הפרויקט במחשב שלך. בזמן שפקודה רצה, מה שתקליד נשלח אליה.</string>
+    <string name="terminal_input_hint">תשובה לפקודה שרצה</string>
+    <string name="stop_command">עצור פקודה</string>
+    <string name="send_input">שלח</string>
+    <string name="run_command">הרץ</string>
+
+    <!-- Files tab and viewer -->
+    <string name="up_one_folder">תיקייה למעלה</string>
+    <string name="folder_empty">התיקייה ריקה</string>
+    <string name="file_meta">%1$s  -  %2$d שורות</string>
+    <string name="file_truncated">  -  256 KB ראשונים</string>
+    <string name="copy_file">העתק קובץ</string>
+    <string name="label_file">הקובץ</string>
+    <string name="close">סגור</string>
+
+    <!-- Projects -->
+    <string name="workspaces">פרויקטים</string>
+    <string name="open_in_ide">פתח ב-IDE</string>
+    <string name="workspaces_subtitle">הסוכן והטרמינל עובדים בפרויקט שתבחר.</string>
+    <string name="open">פתח</string>
+    <string name="active">פעיל</string>
+    <string name="msg_opened_in_ide">נפתח ב-Antigravity IDE</string>
+
+    <!-- Settings -->
+    <string name="settings_title">הגדרות</string>
+    <string name="back">חזרה</string>
+    <string name="settings_language">שפה</string>
+    <string name="language_system">שפת הטלפון</string>
+    <string name="language_hebrew">עברית</string>
+    <string name="language_english">English</string>
+    <string name="settings_updates">עדכונים</string>
+    <string name="app_version">גרסת האפליקציה %1$s</string>
+    <string name="check_updates">בדוק עדכונים</string>
+    <string name="checking_updates">בודק ב-GitHub...</string>
+    <string name="up_to_date">יש לך את הגרסה העדכנית</string>
+    <string name="update_available">גרסה %1$s זמינה</string>
+    <string name="update_download">הורד והתקן</string>
+    <string name="update_downloading">מוריד %1$d%%</string>
+    <string name="update_verify_failed">ההורדה נפגמה. נסה שוב.</string>
+    <string name="update_failed">העדכון נכשל: %1$s</string>
+    <string name="update_allow_installs">אפשר ל-Antigravity Remote להתקין עדכונים, ואז הקש שוב על \"הורד והתקן\".</string>
+    <string name="whats_new">מה חדש</string>
+    <string name="bridge_version">הצד שבמחשב: גרסה %1$s</string>
+    <string name="bridge_updates_itself">הצד שבמחשב מתעדכן לבד בכל הפעלה של start-bridge.bat.</string>
+    <string name="settings_connection">חיבור</string>
+    <string name="connection_routes">הדרכים להגיע למחשב שלך</string>
+    <string name="connection_no_routes">עדיין לא חובר מחשב</string>
+    <string name="tailscale_title">צריך Tailscale?</string>
+    <string name="tailscale_body">לא. start-bridge.bat פותח לבד מנהרה מאובטחת, כך שהאפליקציה מגיעה למחשב מכל מקום, ב-Wi-Fi או בגלישה סלולרית, ומוצאת אותו שוב אחרי הפעלה מחדש בלי לסרוק. Tailscale הוא רשות: אם תתקין אותו במחשב ובטלפון עם אותו חשבון, האפליקציה תשתמש גם בו כדרך פרטית וקבועה.</string>
+    <string name="tailscale_open">מידע על Tailscale</string>
+    <string name="settings_about">אודות</string>
+    <string name="open_github">הפרויקט ב-GitHub</string>
+</resources>

@@ -3,6 +3,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { EventHub } from "./events";
+import { t } from "./i18n";
 import { commandLine, killTree } from "./proc";
 
 /**
@@ -109,15 +110,15 @@ export class AgentSession {
   /** Queue a prompt; it is sent as soon as the agent is idle. */
   async prompt(text: string): Promise<"sent" | "queued"> {
     const trimmed = text.trim();
-    if (!trimmed) throw new Error("Prompt is empty");
+    if (!trimmed) throw new Error(t("Message is empty"));
     if (!this.command) {
-      throw new Error("Antigravity CLI (agy) was not found. Install it from Antigravity, or set agentCommand in .bridge-config.json.");
+      throw new Error(t("Antigravity CLI (agy) was not found on the PC. Install Antigravity and run agy once."));
     }
     this.lastPrompt = trimmed;
     this.hub.log("agent", "user", trimmed);
     if (this.state === "working" || this.state === "awaiting_permission" || this.state === "starting") {
       this.queue.push(trimmed);
-      this.hub.log("agent", "system", `Queued (${this.queue.length} waiting). It runs when the current turn ends.`);
+      this.hub.log("agent", "system", t("Waiting ({0}). It will be sent when the agent finishes.", this.queue.length));
       this.onStateChange();
       return "queued";
     }
@@ -143,10 +144,10 @@ export class AgentSession {
     }
     if (this.sessionId && (this.state === "working" || this.state === "awaiting_permission")) {
       this.notify("session/cancel", { sessionId: this.sessionId });
-      this.hub.log("agent", "action", dropped > 0 ? `Stop requested (dropped ${dropped} queued prompts)` : "Stop requested");
+      this.hub.log("agent", "action", dropped > 0 ? t("Stopping (removed {0} waiting messages)", dropped) : t("Stopping"));
       return "Cancelling the current agent turn";
     }
-    this.hub.log("agent", "action", "Nothing is running");
+    this.hub.log("agent", "action", t("Nothing is running"));
     return "Agent is not running a turn";
   }
 
@@ -154,7 +155,7 @@ export class AgentSession {
   async restart(): Promise<string> {
     this.queue = [];
     this.shutdown("restart");
-    this.hub.log("agent", "action", "Starting a new agent session");
+    this.hub.log("agent", "action", t("New conversation"));
     if (!this.command) return "Antigravity CLI not found";
     await this.ensureSession().catch(() => undefined);
     return "New agent session started";
@@ -176,7 +177,7 @@ export class AgentSession {
     if (this.sessionCwd && path.resolve(this.sessionCwd) === path.resolve(workspace)) return;
     if (this.proc) {
       this.shutdown("workspace changed");
-      this.hub.log("agent", "system", `Agent session moved to ${path.basename(workspace)}`);
+      this.hub.log("agent", "system", t("Now working in {0}", path.basename(workspace)));
     }
   }
 
@@ -208,7 +209,7 @@ export class AgentSession {
       } catch (err) {
         this.queue = [];
         this.lastError = (err as Error).message;
-        this.hub.log("agent", "error", `Could not start the agent: ${this.lastError}`);
+        this.hub.log("agent", "error", t("Could not start the agent: {0}", this.lastError));
         this.setState("error");
         return;
       }
@@ -221,11 +222,11 @@ export class AgentSession {
         });
         this.endStreams();
         const reason = String(result?.stopReason ?? "end_turn");
-        if (reason === "cancelled") this.hub.log("agent", "system", "Turn cancelled");
-        else if (reason !== "end_turn") this.hub.log("agent", "system", `Turn ended: ${reason}`);
+        if (reason === "cancelled") this.hub.log("agent", "system", t("Stopped"));
+        else if (reason !== "end_turn") this.hub.log("agent", "system", t("Turn ended: {0}", reason));
       } catch (err) {
         this.endStreams();
-        if (this.proc) this.hub.log("agent", "error", `Prompt failed: ${(err as Error).message}`);
+        if (this.proc) this.hub.log("agent", "error", t("The message failed: {0}", (err as Error).message));
       }
       if (this.proc) this.setState("idle");
     }
@@ -250,14 +251,13 @@ export class AgentSession {
       session = await this.request("session/new", { cwd: workspace, mcpServers: [] });
     } catch (err) {
       const message = (err as Error).message;
-      throw new Error(/auth/i.test(message) ? `${message}. Run "agy" once in a terminal on the PC to sign in.` : message);
+      throw new Error(/auth/i.test(message) ? t("{0}. Run agy once on the PC to sign in.", message) : message);
     }
     this.sessionId = String(session?.sessionId ?? "");
     if (!this.sessionId) throw new Error("Agent did not return a session id");
     this.sessionCwd = workspace;
     this.title = null;
     this.lastError = null;
-    this.hub.log("agent", "system", "Agent session ready");
     this.setState("idle");
   }
 
@@ -266,7 +266,6 @@ export class AgentSession {
     if (this.proc && this.procCwd === workspace) return;
     if (this.proc) this.shutdown("workspace changed");
     if (!this.command) throw new Error("Antigravity CLI (agy) not found");
-    this.hub.log("agent", "system", `Starting Antigravity agent in ${workspace}`);
 
     const launch = commandLine(this.command, ["acp"]);
     const proc = spawn(launch.file, launch.args, {
@@ -288,20 +287,20 @@ export class AgentSession {
     proc.on("error", (err) => {
       if (this.proc !== proc) return;
       this.lastError = err.message;
-      this.hub.log("agent", "error", `Agent process error: ${err.message}`);
+      this.hub.log("agent", "error", t("The agent stopped unexpectedly ({0})", err.message));
       this.shutdown("process error");
       this.setState("error");
     });
     proc.on("exit", (code) => {
       if (this.proc !== proc) return;
-      this.hub.log("agent", "error", `Agent process exited (code ${code ?? "unknown"})`);
+      this.hub.log("agent", "error", t("The agent stopped unexpectedly ({0})", code ?? "?"));
       this.shutdown("process exited");
     });
 
     await this.request("initialize", {
       protocolVersion: 1,
       clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-      clientInfo: { name: "antigravity-remote-bridge", version: "1.2.0" },
+      clientInfo: { name: "antigravity-remote-bridge", version: "1.3.0" },
     });
     this.procCwd = workspace;
   }
@@ -406,7 +405,7 @@ export class AgentSession {
           const mark = entry.status === "completed" ? "[x]" : entry.status === "in_progress" ? "[>]" : "[ ]";
           return `${mark} ${entry.content ?? ""}`;
         });
-        this.hub.log("agent", "system", `Plan\n${lines.join("\n")}`);
+        this.hub.log("agent", "system", `${t("Plan")}\n${lines.join("\n")}`);
         return;
       }
       case "session_info_update": {
@@ -450,7 +449,7 @@ export class AgentSession {
       detail,
       options,
     };
-    this.hub.log("agent", "action", `Approval needed: ${shorten(this.pendingPermission.title)}`);
+    this.hub.log("agent", "action", t("Approval needed: {0}", shorten(this.pendingPermission.title)));
     this.hub.emit({ type: "permission", channel: "agent", data: this.permission as unknown as Record<string, unknown> });
     this.setState("awaiting_permission");
   }
@@ -458,7 +457,7 @@ export class AgentSession {
   private answerPermission(preferredKinds: string[], verb: string): string {
     const pending = this.pendingPermission;
     if (!pending) {
-      this.hub.log("agent", "action", `${verb}: nothing is waiting for approval`);
+      this.hub.log("agent", "action", t("Nothing is waiting for approval"));
       return "Nothing is waiting for approval";
     }
     const option =
@@ -471,7 +470,7 @@ export class AgentSession {
     }
     this.clearPermission();
     if (verb === "Rejected" && pending.toolCallId) this.rejectedTools.add(pending.toolCallId);
-    this.hub.log("agent", "action", `${verb}: ${shorten(pending.title)}`);
+    this.hub.log("agent", "action", verb === "Approved" ? t("Approved: {0}", shorten(pending.title)) : t("Rejected: {0}", shorten(pending.title)));
     this.setState("working");
     return `${verb} ${shorten(pending.title)}`;
   }

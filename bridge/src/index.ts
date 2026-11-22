@@ -12,9 +12,11 @@ import { EventHub, StreamEvent } from "./events";
 import { listDirectory, readFileContent } from "./files";
 import { IdeIntegration } from "./ide";
 import { IdeHubSession } from "./ide-hub";
+import { AddressRelay } from "./relay";
+import { setLanguage, t } from "./i18n";
 import { TerminalSession } from "./terminal";
 
-const VERSION = "1.2.0";
+const VERSION = "1.3.0";
 
 const cli = parseCli(process.argv.slice(2));
 const config = loadOrCreateConfig(cli);
@@ -89,14 +91,14 @@ function fail(res: Response, status: number, err: unknown): void {
 async function switchWorkspace(target: string): Promise<string> {
   const resolved = path.resolve(target.trim());
   if (!target.trim() || !fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
-    throw new Error(`Not a folder: ${target}`);
+    throw new Error(t("Not a folder: {0}", target));
   }
   config.activeWorkspace = resolved;
   config.workspaces = [resolved, ...config.workspaces.filter((w) => w.toLowerCase() !== resolved.toLowerCase())];
   saveConfig(config);
   await agent.moveTo(resolved);
   if (!terminal.running) terminal.resetTo(resolved);
-  hub.log("agent", "system", `Workspace: ${path.basename(resolved)} (${resolved})`);
+  hub.log("agent", "system", t("Project: {0}", path.basename(resolved)));
   scheduleStatus();
   return resolved;
 }
@@ -128,7 +130,7 @@ async function performAction(action: string, target: string): Promise<string> {
 
 async function handlePrompt(prompt: string): Promise<string> {
   const trimmed = prompt.trim();
-  if (!trimmed) throw new Error("Prompt is empty");
+  if (!trimmed) throw new Error(t("Message is empty"));
   if (trimmed.startsWith("!")) {
     terminal.run(trimmed.slice(1));
     return "terminal";
@@ -182,6 +184,7 @@ app.use("/api", (req: Request, res: Response, next: NextFunction) => {
     res.status(429).json({ error: "Too many failed attempts. Try again later." });
     return;
   }
+  setLanguage(String(req.headers["x-app-language"] ?? ""));
   const header = req.headers.authorization ?? "";
   const provided = header.startsWith("Bearer ") ? header.slice(7).trim() : String(req.headers["x-auth-token"] ?? "");
   if (!provided || !tokenMatches(provided)) {
@@ -216,7 +219,7 @@ app.post("/api/ide/open", (req, res) => {
   try {
     const folder = bodyString(req, "path") || config.activeWorkspace;
     ide.openFolder(folder);
-    hub.log("agent", "system", `Opened ${path.basename(folder)} in Antigravity IDE`);
+    hub.log("agent", "system", t("Opened {0} in Antigravity IDE", path.basename(folder)));
     res.json({ ok: true });
   } catch (err) {
     fail(res, 400, err);
@@ -243,7 +246,7 @@ app.post("/api/ide/conversations/open", async (req, res) => {
 app.post("/api/ide/conversations/new", async (req, res) => {
   try {
     const prompt = bodyString(req, "prompt").trim();
-    if (!prompt) throw new Error("Prompt is empty");
+    if (!prompt) throw new Error(t("Message is empty"));
     const title = await ideChat.create(prompt);
     res.json({ ok: true, title });
   } catch (err) {
@@ -254,7 +257,7 @@ app.post("/api/ide/conversations/new", async (req, res) => {
 app.post("/api/ide/conversations/close", (_req, res) => {
   ideChat.close();
   hub.emit({ type: "clear", channel: "agent" });
-  hub.log("agent", "system", "Back to the bridge agent session");
+  hub.log("agent", "system", t("Back to the agent on the PC"));
   res.json({ ok: true });
 });
 
@@ -332,6 +335,7 @@ wss.on("connection", (ws, req) => {
     ws.close(4001, "Unauthorized");
     return;
   }
+  setLanguage(url.searchParams.get("lang"));
   const remote = req.socket.remoteAddress ?? "unknown";
   console.log(`[bridge] phone connected from ${remote}`);
 
@@ -399,50 +403,55 @@ server.on("error", (err: NodeJS.ErrnoException) => {
   process.exit(1);
 });
 
-async function start(): Promise<void> {
-  addresses = await listAddresses();
-  advertisedHost = config.advertiseHost || addresses[0]?.address || "127.0.0.1";
-  server.listen(config.port, "0.0.0.0", printBanner);
-}
-
-function printBanner(): void {
-  // "ip" stays first for older app versions; "hosts" lists every route the app may try, best first.
-  const routes = [
+/** Every way to reach this PC, best first: LAN address, Tailscale addresses, then the public URL. */
+function currentRoutes(): { hosts: string[]; port: number; url?: string } {
+  const hosts = [
     advertisedHost,
     ...addresses.filter((a) => isTailscaleAddress(a.address) && a.address !== advertisedHost).map((a) => a.address),
   ];
-  const payload = JSON.stringify({
-    ip: advertisedHost,
-    port: config.port,
-    token: config.token,
-    hosts: routes,
-    ...(publicUrl ? { url: publicUrl } : {}),
+  return { hosts, port: config.port, ...(publicUrl ? { url: publicUrl } : {}) };
+}
+
+const relay = config.relay !== false && !cli.noRelay ? new AddressRelay(config.token, currentRoutes) : null;
+
+async function start(): Promise<void> {
+  addresses = await listAddresses();
+  advertisedHost = config.advertiseHost || addresses[0]?.address || "127.0.0.1";
+  server.listen(config.port, "0.0.0.0", () => {
+    printBanner();
+    relay?.start();
   });
-  const tailscale = routes.filter(isTailscaleAddress);
+}
+
+function printBanner(): void {
+  const routes = currentRoutes();
+  // "ip" stays for older app versions; "hosts" and "url" list every route the app may try.
+  const payload = JSON.stringify({ ip: advertisedHost, port: config.port, token: config.token, hosts: routes.hosts, ...(routes.url ? { url: routes.url } : {}) });
+  const tailscale = routes.hosts.filter(isTailscaleAddress);
   const line = "=".repeat(64);
+  const away = routes.url
+    ? "ready (tunnel)"
+    : tailscale.length > 0
+      ? "ready (Tailscale)"
+      : "home network only - start with the tunnel or install Tailscale";
   console.log("");
   console.log(line);
-  console.log(`  ANTIGRAVITY REMOTE BRIDGE v${VERSION}`);
+  console.log(`  ANTIGRAVITY REMOTE  v${VERSION}   ${config.displayName || os.hostname()}`);
   console.log(line);
-  console.log(`  Host        ${config.displayName || os.hostname()}`);
-  console.log(`  Address     ${advertisedHost}:${config.port}`);
-  const others = addresses.filter((a) => a.address !== advertisedHost);
-  if (others.length > 0) {
-    console.log(`  Also on     ${others.map((a) => `${a.address} (${a.name})`).join(", ")}`);
-  }
-  console.log(`  Tailscale   ${tailscale.length > 0 ? tailscale.join(", ") : "not connected - install Tailscale to reach this PC from anywhere"}`);
-  if (publicUrl) console.log(`  Public URL  ${publicUrl} (HTTPS - works from anywhere)`);
-  console.log(`  Token       ${config.token}`);
-  console.log(`  Workspace   ${config.activeWorkspace}`);
-  console.log(`  Agent CLI   ${agent.commandPath ?? "not found - prompts need the Antigravity CLI (agy)"}`);
-  console.log(`  IDE         ${ide.installed ? (ide.isRunning ? "installed, running" : "installed") : "not found"}`);
-  console.log(`  Config      ${CONFIG_PATH}`);
-  console.log(line);
-  console.log("  Scan this code with the Antigravity Remote app:");
+  console.log("  Scan this code once with the Antigravity Remote app:");
   console.log("");
   qrcode.generate(payload, { small: true }, (code) => console.log(code));
-  console.log(`  Manual entry: ${advertisedHost}  port ${config.port}  token above`);
-  console.log("  Press Ctrl+C to stop.");
+  console.log(`  At home       ${advertisedHost}:${config.port}`);
+  if (tailscale.length > 0) console.log(`  Tailscale     ${tailscale.join(", ")}`);
+  if (routes.url) console.log(`  Tunnel        ${routes.url}`);
+  console.log(`  Away access   ${away}`);
+  console.log(`  Auto-find     ${relay ? "on - the phone finds new addresses by itself" : "off"}`);
+  console.log(`  Agent         ${agent.commandPath ? "Antigravity CLI found" : "Antigravity CLI (agy) not found"}${ide.installed ? ", IDE found" : ""}`);
+  console.log(`  Workspace     ${config.activeWorkspace}`);
+  console.log(`  Token         ${config.token}`);
+  console.log(`  Settings      ${CONFIG_PATH}`);
+  console.log(line);
+  console.log("  Keep this window open. Press Ctrl+C to stop.");
   console.log(line);
 }
 
@@ -450,6 +459,7 @@ void start();
 
 const shutdown = (): void => {
   clearInterval(statusHeartbeat);
+  relay?.stop();
   ideChat.close();
   agent.shutdown("bridge stopping");
   terminal.stop();

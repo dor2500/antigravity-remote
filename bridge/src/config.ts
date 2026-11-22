@@ -20,6 +20,8 @@ export interface BridgeConfig {
   advertiseHost?: string;
   /** PC name shown in the app. Defaults to the Windows computer name. */
   displayName?: string;
+  /** Publish the current routes, encrypted, so a paired phone finds a new tunnel URL by itself. */
+  relay?: boolean;
   /** Public https URL that reaches this bridge (a tunnel or reverse proxy), offered to the phone as a fallback route. */
   publicUrl?: string;
 }
@@ -32,6 +34,7 @@ export interface CliOptions {
   /** Public URL for this run only (start-bridge-remote.bat passes its tunnel address here). */
   url?: string;
   publicUrl?: string;
+  noRelay: boolean;
   resetToken: boolean;
 }
 
@@ -53,6 +56,7 @@ export function parseCli(argv: string[]): CliOptions {
     name: value("--name"),
     url: value("--url"),
     publicUrl: value("--public-url"),
+    noRelay: argv.includes("--no-relay"),
     resetToken: argv.includes("--reset-token"),
   };
 }
@@ -187,6 +191,7 @@ export function loadOrCreateConfig(cli: CliOptions): BridgeConfig {
     advertiseHost: cli.host ?? stored.advertiseHost,
     displayName: cli.name ?? stored.displayName,
     publicUrl: normalizeUrl(stored.publicUrl),
+    relay: stored.relay !== false,
   };
   saveConfig(config);
   return config;

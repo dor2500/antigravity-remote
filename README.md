@@ -15,7 +15,9 @@
   </a>
 </p>
 
-**Antigravity Remote** puts Antigravity IDE on your Android phone. Follow the IDE's agent conversations live and reply to them, start new ones, approve or reject the commands the agent wants to run, use a terminal in the project folder, and browse the code. It works on your home network and, with Tailscale or a tunnel, from anywhere.
+<p align="center"><b><a href="README.he.md">עברית</a></b> | English</p>
+
+**Antigravity Remote** puts Antigravity IDE on your Android phone. Follow the IDE's agent conversations live and reply to them, start new ones, approve or reject the commands the agent wants to run, use a terminal in the project folder, and browse the code. It works at home and away, on Wi-Fi or mobile data: you scan a QR code once and the app finds your PC by itself from then on. The app is in Hebrew and English.
 
 ## Screenshots
 
@@ -26,28 +28,24 @@
 
 ## Quick start
 
-1. **Start the bridge on Windows.** Clone this repository and double-click one of:
-   - `start-bridge-remote.bat`: works from anywhere (mobile data, any Wi-Fi) through an automatic Cloudflare HTTPS tunnel, with no VPN or router setup;
-   - `start-bridge.bat`: home network and Tailscale only.
-
-   The first run installs dependencies, builds the bridge, asks once (UAC) to open TCP port 8765 in Windows Firewall, and prints a QR code.
+1. **Start the bridge on Windows.** Clone this repository and double-click `start-bridge.bat`. It updates itself from GitHub, installs what it needs (Node.js and Cloudflare's `cloudflared`, with winget), opens a secure tunnel so the phone works from anywhere, asks once (UAC) to open port 8765 for your home network, and shows a QR code. Keep its window open.
 
    ```powershell
-   git clone https://github.com/dor2500/antigravity-remote; .\antigravity-remote\start-bridge-remote.bat
+   git clone https://github.com/dor2500/antigravity-remote; .\antigravity-remote\start-bridge.bat
    ```
 
 2. **Install the app on Android.** Download [`AntigravityRemote-latest.apk`](https://github.com/dor2500/antigravity-remote/releases/latest/download/AntigravityRemote-latest.apk) on the phone and open it. Allow installs from your browser if Android asks.
 
-3. **Scan the QR code.** Tap **Scan Bridge QR Code** and point the camera at the terminal. The phone remembers the PC and reconnects automatically from then on.
+3. **Scan the QR code.** Tap **Scan the QR code** and point the camera at the bridge window. That is all: from then on the app connects by itself, at home or away, even after the PC restarts.
 
-To reach the PC when you are away from home, see [Use it from anywhere](#use-it-from-anywhere).
+App updates are one tap: **Settings > Check for updates** downloads the newest release from GitHub, checks its SHA-256 and opens the Android installer. The PC side updates itself every time `start-bridge.bat` starts.
 
 ### Requirements
 
 | On the PC | On the phone |
 | --- | --- |
 | Windows 10 or 11 | Android 8.0 (API 26) or newer |
-| [Antigravity](https://antigravity.google) with its CLI (`agy`) signed in: run `agy` once in a terminal | Same Wi-Fi as the PC, Tailscale, or a public tunnel URL |
+| [Antigravity](https://antigravity.google) with its CLI (`agy`) signed in: run `agy` once in a terminal | Any internet connection |
 | Node.js 18+ (installed automatically with winget if missing) | |
 
 ## How it works
@@ -82,21 +80,17 @@ When no IDE conversation is open, the bridge starts the Antigravity agent throug
 
 ## Use it from anywhere
 
-The pairing QR code carries every route to the PC: its LAN address, its Tailscale address, and an optional public URL. The phone tries them in order and switches by itself, for example from Wi-Fi at home to mobile data on the road.
+Nothing to set up. `start-bridge.bat` opens a free Cloudflare quick tunnel (an `https://...trycloudflare.com` address) next to the home-network address, and the QR code carries both. The phone tries the fastest route first and switches by itself, for example from Wi-Fi at home to mobile data on the road.
 
-**Quickest: `start-bridge-remote.bat`.** It installs `cloudflared` with winget if needed, opens a free Cloudflare quick tunnel and adds its `https://...trycloudflare.com` address to the QR code. The address changes every time the bridge starts, so scan the code again after a restart. Your LAN and Tailscale routes keep working in between.
+**After a restart.** A quick tunnel gets a new address every time the bridge starts. You do not scan again: the bridge publishes its current addresses to a relay (a private topic on the free [ntfy.sh](https://ntfy.sh) service), encrypted with AES-256-GCM using a key derived from your pairing token. When the saved addresses stop answering, the app reads the relay, decrypts the new addresses and reconnects. The topic name is also derived from the token, so only your phone can find it, and ntfy.sh only ever sees ciphertext. To turn this off, set `"relay": false` in the config file or pass `--no-relay` to the bridge, in which case scan again after each restart.
 
-**Most reliable: Tailscale (free, private, encrypted).**
+### Do I need Tailscale?
 
-1. Install [Tailscale](https://tailscale.com/download) on the PC and on the phone, and sign in to the same account on both.
-2. Restart `start-bridge.bat`. The banner now lists a `Tailscale` address, and the QR code includes it.
-3. Scan the QR code again once. From then on the app reaches the PC from any network.
-
-Nothing is exposed to the internet, and the firewall rule already allows Tailscale's address range.
+No. The tunnel and the relay cover access from anywhere. Tailscale is an optional extra: install it on the PC and on the phone with the same account, restart the bridge and scan once, and the app also gets a private, fixed route that never leaves your Tailscale network. The firewall rule already allows Tailscale's address range.
 
 **Your own stable URL.** If you run a tunnel or reverse proxy with a fixed `https://` address that forwards to `http://localhost:8765` (a named Cloudflare Tunnel, an ngrok static domain), put it in the config file as `publicUrl`, or pass `start-bridge.bat -PublicUrl https://your-address`. It is added to the QR code as a route and does not change between restarts.
 
-With either tunnel, anyone who finds the URL reaches the bridge's token check, so the bridge locks out an address for 10 minutes after 10 wrong tokens.
+With any tunnel, anyone who finds the URL reaches the bridge's token check, so the bridge locks out an address for 10 minutes after 10 wrong tokens.
 
 ## Bridge reference
 
@@ -108,7 +102,8 @@ With either tunnel, anyone who finds the URL reaches the bridge's token check, s
 | `-Workspace C:\path\to\project` | Folder to open first |
 | `-Name "Office PC"` | PC name shown in the app |
 | `-ResetToken` | Issue a new token, which unpairs every phone |
-| `-Tunnel` | Open a Cloudflare quick tunnel and add its URL to the QR code (what `start-bridge-remote.bat` does) |
+| `-NoTunnel` | Home network and Tailscale only, no Cloudflare tunnel |
+| `-NoUpdate` | Do not update from GitHub at start |
 | `-PublicUrl https://...` | Your own public https address that forwards to the bridge (added to the QR code) |
 | `-SkipFirewall` | Do not create the firewall rule |
 
@@ -148,6 +143,7 @@ The token gives full control of the agent and a shell on your PC, so treat it li
 - The firewall rule allows the port from the local subnet and Tailscale (`100.64.0.0/10`) only. Do not forward the port on your router; use Tailscale, or a tunnel that gives you `https`.
 - Traffic is plain HTTP on your LAN, encrypted end to end over Tailscale, and HTTPS through a tunnel URL.
 - The bridge reaches Antigravity's hub on localhost with the CSRF token the hub writes for local clients; nothing from the hub is exposed beyond what the phone's token already allows.
+- The address relay sends only AES-256-GCM ciphertext to ntfy.sh, under a topic name derived from the token. Turn it off with `"relay": false` in the config file.
 - Run `start-bridge.bat -ResetToken` to revoke every paired phone.
 
 ## Building from source
@@ -181,9 +177,9 @@ Store the release key in the repository secrets `ANDROID_KEYSTORE_BASE64`, `ANDR
 
 | Symptom | Fix |
 | --- | --- |
-| Phone says it cannot reach the bridge | Make sure both devices are on the same network, then run `start-bridge.bat` again and accept the UAC prompt so it can add the firewall rule. Wi-Fi with client isolation (guest networks) blocks device-to-device traffic. |
-| QR code shows the wrong IP | Use the address listed under **Also on**, or set `advertiseHost` in the config file. |
-| Works at home but not on mobile data | Install Tailscale on both devices (see [Use it from anywhere](#use-it-from-anywhere)), restart the bridge and scan again. |
+| The app cannot reach the PC | Make sure the `start-bridge.bat` window is open on the PC. If its banner says `Away access  home network only`, the tunnel did not start: check the PC's internet connection and run it again. |
+| Works away but not at home | Run `start-bridge.bat` again and accept the UAC prompt so it can open the port for your home network. Guest Wi-Fi networks block device-to-device traffic; the tunnel still works there. |
+| QR code shows the wrong home address | Set `advertiseHost` in the config file. |
 | "IDE conversations (IDE not running)" | Open Antigravity IDE on the PC. The menu enables itself once the IDE's hub is running. |
 | "Antigravity CLI (agy) not found" | Install Antigravity, run `agy` once in a terminal to sign in, then restart the bridge. |
 | Agent never starts | Run `agy` in a terminal on the PC and check that it works there. Its sign-in is shared with the bridge. |

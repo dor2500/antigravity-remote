@@ -1,5 +1,7 @@
 package com.antigravity.remote.ui.screens
 
+import androidx.compose.ui.res.stringResource
+import com.antigravity.remote.R
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -69,7 +71,7 @@ fun FilesTab(
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onNavigateUp, enabled = path.isNotEmpty()) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Up one folder")
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.up_one_folder))
             }
             Breadcrumbs(
                 root = uiState.bridgeStatus.workspaceName.ifEmpty { "workspace" },
@@ -78,7 +80,7 @@ fun FilesTab(
                 modifier = Modifier.weight(1f)
             )
             IconButton(onClick = onRefresh) {
-                Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+                Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.refresh))
             }
         }
         if (uiState.filesLoading) {
@@ -86,7 +88,7 @@ fun FilesTab(
         }
         if (uiState.fileEntries.isEmpty() && !uiState.filesLoading) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("This folder is empty", color = TextSecondary)
+                Text(stringResource(R.string.folder_empty), color = TextSecondary)
             }
         } else if (uiState.fileEntries.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

@@ -1,5 +1,7 @@
 package com.antigravity.remote.ui.screens
 
+import androidx.compose.ui.res.stringResource
+import com.antigravity.remote.R
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -67,7 +69,7 @@ fun TerminalTab(
     onInput: (String) -> Unit,
     onStop: () -> Unit,
     onClear: () -> Unit,
-    onCopy: (String, String) -> Unit
+    onCopy: (String, Int) -> Unit
 ) {
     var input by rememberSaveable { mutableStateOf("") }
     val status = uiState.bridgeStatus
@@ -93,7 +95,7 @@ fun TerminalTab(
             Spacer(Modifier.width(8.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = if (running) "Running: ${status.terminalCommand.orEmpty()}" else "Ready",
+                    text = if (running) stringResource(R.string.terminal_running, status.terminalCommand.orEmpty()) else stringResource(R.string.terminal_ready),
                     style = MaterialTheme.typography.labelLarge,
                     color = TextPrimary,
                     maxLines = 1,
@@ -108,18 +110,18 @@ fun TerminalTab(
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            IconButton(onClick = { onCopy(uiState.terminalLogs.copyText(), "Terminal output") }) {
-                Icon(Icons.Default.ContentCopy, contentDescription = "Copy terminal output", tint = TextSecondary, modifier = Modifier.size(18.dp))
+            IconButton(onClick = { onCopy(uiState.terminalLogs.copyText(), R.string.label_terminal_output) }) {
+                Icon(Icons.Default.ContentCopy, contentDescription = stringResource(R.string.copy_terminal), tint = TextSecondary, modifier = Modifier.size(18.dp))
             }
             IconButton(onClick = onClear) {
-                Icon(Icons.Default.DeleteSweep, contentDescription = "Clear terminal", tint = TextSecondary, modifier = Modifier.size(20.dp))
+                Icon(Icons.Default.DeleteSweep, contentDescription = stringResource(R.string.clear_terminal), tint = TextSecondary, modifier = Modifier.size(20.dp))
             }
         }
 
         LogList(
             entries = uiState.terminalLogs,
-            emptyText = "Commands run in PowerShell inside the active workspace. cd is remembered between commands. While a command runs, what you type is sent to its input.",
-            onLongPress = { onCopy(it.message, "Line") },
+            emptyText = stringResource(R.string.terminal_empty),
+            onLongPress = { onCopy(it.message, R.string.label_line) },
             modifier = Modifier.weight(1f).fillMaxWidth().background(BgPrimary)
         ) { TerminalLogLine(it) }
 
@@ -155,7 +157,7 @@ fun TerminalTab(
                 onValueChange = { input = it },
                 placeholder = {
                     Text(
-                        text = if (running) "Input for the running command" else "PS> command",
+                        text = if (running) stringResource(R.string.terminal_input_hint) else "PS> command",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 14.sp
                     )
@@ -182,7 +184,7 @@ fun TerminalTab(
                     onClick = onStop,
                     colors = IconButtonDefaults.iconButtonColors(containerColor = StatusRed.copy(alpha = 0.18f), contentColor = StatusRed)
                 ) {
-                    Icon(Icons.Default.Stop, contentDescription = "Stop command")
+                    Icon(Icons.Default.Stop, contentDescription = stringResource(R.string.stop_command))
                 }
             }
             IconButton(
@@ -198,7 +200,7 @@ fun TerminalTab(
             ) {
                 Icon(
                     imageVector = if (running) Icons.AutoMirrored.Filled.KeyboardReturn else Icons.AutoMirrored.Filled.Send,
-                    contentDescription = if (running) "Send input" else "Run command"
+                    contentDescription = if (running) stringResource(R.string.send_input) else stringResource(R.string.run_command)
                 )
             }
         }

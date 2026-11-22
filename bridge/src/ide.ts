@@ -3,6 +3,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { commandLine } from "./proc";
+import { t } from "./i18n";
 
 /** Locates the Antigravity IDE install and reports whether it is running. */
 export class IdeIntegration {
@@ -26,7 +27,7 @@ export class IdeIntegration {
 
   /** Opens a folder in the IDE, reusing the current window. */
   openFolder(folder: string): void {
-    if (!this.cliPath) throw new Error("Antigravity IDE was not found on this PC");
+    if (!this.cliPath) throw new Error(t("Antigravity IDE was not found on this PC"));
     const launch = commandLine(this.cliPath, ["--reuse-window", folder]);
     const child = spawn(launch.file, launch.args, {
       ...launch.options,

@@ -26,8 +26,8 @@ android {
         applicationId = "com.antigravity.remote"
         minSdk = 26
         targetSdk = 35
-        versionCode = 10200
-        versionName = "1.2.0"
+        versionCode = 10300
+        versionName = "1.3.0"
         vectorDrawables {
             useSupportLibrary = true
         }
@@ -86,6 +86,7 @@ dependencies {
     implementation(composeBom)
 
     implementation("androidx.core:core-ktx:1.15.0")
+    implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")

@@ -2,6 +2,7 @@ import { ChildProcessWithoutNullStreams, spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 import { StringDecoder } from "string_decoder";
+import { t } from "./i18n";
 import { killTree } from "./proc";
 import { EventHub, LogLevel } from "./events";
 
@@ -44,8 +45,8 @@ export class TerminalSession {
 
   run(command: string): void {
     const trimmed = command.trim();
-    if (!trimmed) throw new Error("Command is empty");
-    if (this.proc) throw new Error(`"${this.command}" is still running. Stop it or send input to it first.`);
+    if (!trimmed) throw new Error(t("Command is empty"));
+    if (this.proc) throw new Error(t("\"{0}\" is still running. Stop it first, or type a reply to it.", this.command));
 
     this.hub.log("terminal", "user", `PS ${this.cwd}> ${trimmed}`);
 
@@ -92,14 +93,14 @@ export class TerminalSession {
   }
 
   sendInput(text: string): void {
-    if (!this.proc || !this.proc.stdin.writable) throw new Error("No command is running");
+    if (!this.proc || !this.proc.stdin.writable) throw new Error(t("No command is running"));
     this.proc.stdin.write(text.endsWith("\n") ? text : `${text}\n`);
     this.hub.log("terminal", "user", `< ${text}`);
   }
 
   stop(): string {
     if (!this.proc) {
-      this.hub.log("terminal", "action", "Nothing is running");
+      this.hub.log("terminal", "action", t("Nothing is running"));
       return "No command is running";
     }
     const { pid } = this.proc;
@@ -107,7 +108,7 @@ export class TerminalSession {
     killTree(pid);
     this.proc = null;
     this.command = null;
-    this.hub.log("terminal", "action", `Stopped: ${command}`);
+    this.hub.log("terminal", "action", t("Stopped: {0}", command));
     this.onStateChange();
     return `Stopped ${command}`;
   }
@@ -120,7 +121,7 @@ export class TerminalSession {
     const target = rawTarget.replace(/^['"]|['"]$/g, "").replace(/^~(?=$|[\\/])/, process.env.USERPROFILE ?? "~");
     const resolved = path.resolve(this.cwd, target);
     if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
-      this.hub.log("terminal", "error", `cd: no such directory: ${resolved}`);
+      this.hub.log("terminal", "error", t("cd: no such folder: {0}", resolved));
       return;
     }
     this.cwd = resolved;

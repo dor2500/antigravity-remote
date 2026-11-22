@@ -1,5 +1,8 @@
 package com.antigravity.remote.ui.screens
 
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
+import com.antigravity.remote.R
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -57,6 +60,7 @@ import com.antigravity.remote.data.PermissionRequest
 import com.antigravity.remote.ui.RemoteUiState
 import com.antigravity.remote.ui.components.AgentLogLine
 import com.antigravity.remote.ui.components.LogList
+import com.antigravity.remote.ui.components.Ltr
 import com.antigravity.remote.ui.theme.AccentBlue
 import com.antigravity.remote.ui.theme.BgPrimary
 import com.antigravity.remote.ui.theme.BgSecondary
@@ -73,7 +77,7 @@ fun AgentTab(
     uiState: RemoteUiState,
     onSendPrompt: (String) -> Unit,
     onAction: (String) -> Unit,
-    onCopy: (String, String) -> Unit,
+    onCopy: (String, Int) -> Unit,
     onShowIdeConversations: () -> Unit,
     onLeaveIdeConversation: () -> Unit
 ) {
@@ -91,7 +95,7 @@ fun AgentTab(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (inIde) {
                         Text(
-                            text = "IDE",
+                            text = stringResource(R.string.ide_badge),
                             color = AccentBlue,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
@@ -102,7 +106,7 @@ fun AgentTab(
                         )
                     }
                     Text(
-                        text = agent.title ?: "Antigravity agent",
+                        text = agent.title ?: stringResource(R.string.agent_default_title),
                         style = MaterialTheme.typography.labelLarge,
                         color = TextPrimary,
                         maxLines = 1,
@@ -110,15 +114,15 @@ fun AgentTab(
                     )
                 }
                 val sub = when {
-                    inIde -> "Live from Antigravity IDE. Messages go to this conversation."
-                    !agent.available -> "Antigravity CLI (agy) not found on the PC"
-                    agent.queued > 0 -> "${agent.queued} prompt${if (agent.queued == 1) "" else "s"} queued"
-                    else -> "Prefix with ! to run a shell command"
+                    inIde -> stringResource(R.string.agent_sub_ide)
+                    !agent.available -> stringResource(R.string.agent_sub_no_cli)
+                    agent.queued > 0 -> pluralStringResource(R.plurals.agent_queued, agent.queued, agent.queued)
+                    else -> stringResource(R.string.agent_sub_hint)
                 }
                 Text(sub, style = MaterialTheme.typography.labelSmall, color = TextSecondary)
             }
-            IconButton(onClick = { onCopy(uiState.agentLogs.copyText(), "Output") }) {
-                Icon(Icons.Default.ContentCopy, contentDescription = "Copy output", tint = TextSecondary, modifier = Modifier.size(18.dp))
+            IconButton(onClick = { onCopy(uiState.agentLogs.copyText(), R.string.label_output) }) {
+                Icon(Icons.Default.ContentCopy, contentDescription = stringResource(R.string.copy_output), tint = TextSecondary, modifier = Modifier.size(18.dp))
             }
             SessionMenu(
                 inIde = inIde,
@@ -131,8 +135,8 @@ fun AgentTab(
 
         LogList(
             entries = uiState.agentLogs,
-            emptyText = "Send a prompt to the Antigravity agent running on your PC. Output, tool calls and approval requests stream here live.",
-            onLongPress = { onCopy(it.message, "Message") },
+            emptyText = stringResource(R.string.agent_empty),
+            onLongPress = { onCopy(it.message, R.string.label_message) },
             modifier = Modifier.weight(1f).fillMaxWidth()
         ) { AgentLogLine(it) }
 
@@ -154,7 +158,7 @@ fun AgentTab(
             OutlinedTextField(
                 value = prompt,
                 onValueChange = { prompt = it },
-                placeholder = { Text(if (busy) "Queue a follow-up..." else "Ask the agent...") },
+                placeholder = { Text(if (busy) stringResource(R.string.prompt_hint_busy) else stringResource(R.string.prompt_hint)) },
                 minLines = 1,
                 maxLines = 6,
                 modifier = Modifier.weight(1f),
@@ -182,7 +186,7 @@ fun AgentTab(
                     disabledContentColor = TextSecondary
                 )
             ) {
-                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send prompt")
+                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(R.string.send_prompt))
             }
         }
     }
@@ -199,19 +203,19 @@ private fun SessionMenu(
     var open by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { open = true }) {
-            Icon(Icons.Default.MoreVert, contentDescription = "Session options", tint = TextSecondary)
+            Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.session_options), tint = TextSecondary)
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = BgTertiary) {
             DropdownMenuItem(
-                text = { Text(if (ideAvailable) "IDE conversations" else "IDE conversations (IDE not running)") },
+                text = { Text(if (ideAvailable) stringResource(R.string.menu_ide_conversations) else stringResource(R.string.menu_ide_conversations_off)) },
                 enabled = ideAvailable,
                 onClick = { open = false; onShowIdeConversations() }
             )
             if (inIde) {
-                DropdownMenuItem(text = { Text("Leave IDE conversation") }, onClick = { open = false; onLeaveIdeConversation() })
+                DropdownMenuItem(text = { Text(stringResource(R.string.menu_leave_ide)) }, onClick = { open = false; onLeaveIdeConversation() })
             } else {
-                DropdownMenuItem(text = { Text("New session") }, onClick = { open = false; onAction("restart") })
-                DropdownMenuItem(text = { Text("Retry last prompt") }, onClick = { open = false; onAction("retry") })
+                DropdownMenuItem(text = { Text(stringResource(R.string.menu_new_session)) }, onClick = { open = false; onAction("restart") })
+                DropdownMenuItem(text = { Text(stringResource(R.string.menu_retry)) }, onClick = { open = false; onAction("retry") })
             }
         }
     }
@@ -230,9 +234,9 @@ private fun PermissionCard(request: PermissionRequest, onApprove: () -> Unit, on
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Default.Warning, contentDescription = null, tint = StatusAmber, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
-            Text("Agent wants to ${verb(request.kind)}", color = StatusAmber, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+            Text(stringResource(R.string.permission_title, stringResource(verb(request.kind))), color = StatusAmber, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
         }
-        Text(
+        Ltr { Text(
             text = request.detail.ifEmpty { request.title },
             fontFamily = FontFamily.Monospace,
             fontSize = 12.sp,
@@ -246,10 +250,10 @@ private fun PermissionCard(request: PermissionRequest, onApprove: () -> Unit, on
                 .heightIn(min = 20.dp)
                 .background(BgPrimary, RoundedCornerShape(8.dp))
                 .padding(10.dp)
-        )
+        ) }
         Row(modifier = Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedButton(onClick = onReject, modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp)) {
-                Text("Reject", color = StatusRed)
+                Text(stringResource(R.string.reject), color = StatusRed)
             }
             Button(
                 onClick = onApprove,
@@ -257,19 +261,19 @@ private fun PermissionCard(request: PermissionRequest, onApprove: () -> Unit, on
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = StatusGreen, contentColor = BgPrimary)
             ) {
-                Text("Approve", fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.approve), fontWeight = FontWeight.SemiBold)
             }
         }
     }
 }
 
-private fun verb(kind: String): String = when (kind) {
-    "execute" -> "run a command"
-    "edit" -> "edit a file"
-    "delete" -> "delete a file"
-    "fetch" -> "fetch a URL"
-    "read" -> "read a file"
-    else -> "perform an action"
+private fun verb(kind: String): Int = when (kind) {
+    "execute" -> R.string.verb_execute
+    "edit" -> R.string.verb_edit
+    "delete" -> R.string.verb_delete
+    "fetch" -> R.string.verb_fetch
+    "read" -> R.string.verb_read
+    else -> R.string.verb_other
 }
 
 @Composable
@@ -281,10 +285,10 @@ private fun QuickActions(hasPermission: Boolean, busy: Boolean, onAction: (Strin
             .padding(horizontal = 12.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        ActionButton("Approve", Icons.Default.Check, StatusGreen, hasPermission, Modifier.weight(1f)) { onAction("approve") }
-        ActionButton("Reject", Icons.Default.Close, StatusRed, hasPermission, Modifier.weight(1f)) { onAction("reject") }
-        ActionButton("Stop", Icons.Default.Stop, StatusAmber, busy, Modifier.weight(1f)) { onAction("stop") }
-        ActionButton("Clear", Icons.Default.DeleteSweep, TextSecondary, true, Modifier.weight(1f)) { onAction("clear") }
+        ActionButton(stringResource(R.string.approve), Icons.Default.Check, StatusGreen, hasPermission, Modifier.weight(1f)) { onAction("approve") }
+        ActionButton(stringResource(R.string.reject), Icons.Default.Close, StatusRed, hasPermission, Modifier.weight(1f)) { onAction("reject") }
+        ActionButton(stringResource(R.string.stop), Icons.Default.Stop, StatusAmber, busy, Modifier.weight(1f)) { onAction("stop") }
+        ActionButton(stringResource(R.string.clear), Icons.Default.DeleteSweep, TextSecondary, true, Modifier.weight(1f)) { onAction("clear") }
     }
 }
 

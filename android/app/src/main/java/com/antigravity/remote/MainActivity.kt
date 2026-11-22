@@ -1,21 +1,27 @@
 package com.antigravity.remote
 
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.antigravity.remote.ui.RemoteViewModel
 import com.antigravity.remote.ui.screens.ConnectionScreen
 import com.antigravity.remote.ui.screens.RemoteActions
 import com.antigravity.remote.ui.screens.RemoteControlScreen
+import com.antigravity.remote.ui.screens.SettingsScreen
 import com.antigravity.remote.ui.theme.AntigravityRemoteTheme
 
-class MainActivity : ComponentActivity() {
+class MainActivity : AppCompatActivity() {
     private val vm: RemoteViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -24,9 +30,13 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
         )
         super.onCreate(savedInstanceState)
+        // Needs the activity registered with AppCompat, so it runs after super.onCreate().
+        applyDefaultLanguage()
+        if (savedInstanceState == null) vm.checkForUpdate()
         setContent {
             AntigravityRemoteTheme {
                 val uiState by vm.uiState.collectAsStateWithLifecycle()
+                var showSettings by rememberSaveable { mutableStateOf(false) }
                 val actions = remember {
                     RemoteActions(
                         sendPrompt = vm::sendPrompt,
@@ -45,17 +55,24 @@ class MainActivity : ComponentActivity() {
                         loadIdeConversations = vm::loadIdeConversations,
                         openIdeConversation = vm::openIdeConversation,
                         newIdeConversation = vm::newIdeConversation,
-                        closeIdeConversation = vm::closeIdeConversation
+                        closeIdeConversation = vm::closeIdeConversation,
+                        openSettings = { showSettings = true }
                     )
                 }
-                if (uiState.isOnline) {
-                    RemoteControlScreen(uiState = uiState, actions = actions)
-                } else {
-                    ConnectionScreen(
+                when {
+                    showSettings -> SettingsScreen(
+                        uiState = uiState,
+                        onBack = { showSettings = false },
+                        onCheckUpdate = vm::checkForUpdate,
+                        onInstallUpdate = vm::installUpdate
+                    )
+                    uiState.isOnline -> RemoteControlScreen(uiState = uiState, actions = actions)
+                    else -> ConnectionScreen(
                         uiState = uiState,
                         onConnect = vm::connect,
                         onQrScanned = vm::connectFromQrPayload,
-                        onClearSaved = vm::clearSavedProfile
+                        onClearSaved = vm::clearSavedProfile,
+                        onOpenSettings = { showSettings = true }
                     )
                 }
             }
@@ -65,5 +82,19 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         vm.onAppForeground()
+    }
+
+    /** The app opens in Hebrew the first time; the language can be changed in Settings. */
+    private fun applyDefaultLanguage() {
+        val prefs = getSharedPreferences("antigravity_remote_app", MODE_PRIVATE)
+        if (prefs.getBoolean(KEY_LANGUAGE_SET, false)) return
+        prefs.edit().putBoolean(KEY_LANGUAGE_SET, true).apply()
+        if (AppCompatDelegate.getApplicationLocales().isEmpty) {
+            AppCompatDelegate.setApplicationLocales(LocaleListCompat.forLanguageTags("he"))
+        }
+    }
+
+    private companion object {
+        const val KEY_LANGUAGE_SET = "language_set"
     }
 }

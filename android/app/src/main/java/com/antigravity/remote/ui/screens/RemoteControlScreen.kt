@@ -1,5 +1,7 @@
 package com.antigravity.remote.ui.screens
 
+import androidx.compose.ui.res.stringResource
+import com.antigravity.remote.R
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -31,6 +33,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.UnfoldMore
@@ -61,6 +64,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import com.antigravity.remote.ui.resolve
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -77,6 +82,7 @@ import com.antigravity.remote.data.FileContent
 import com.antigravity.remote.data.LogEntry
 import com.antigravity.remote.data.WorkspaceItem
 import com.antigravity.remote.ui.RemoteUiState
+import com.antigravity.remote.ui.components.Ltr
 import com.antigravity.remote.ui.components.StatusDot
 import com.antigravity.remote.ui.theme.AccentBlue
 import com.antigravity.remote.ui.theme.BgPrimary
@@ -106,10 +112,11 @@ data class RemoteActions(
     val loadIdeConversations: () -> Unit,
     val openIdeConversation: (String) -> Unit,
     val newIdeConversation: (String) -> Unit,
-    val closeIdeConversation: () -> Unit
+    val closeIdeConversation: () -> Unit,
+    val openSettings: () -> Unit
 )
 
-private enum class Tab(val label: String) { AGENT("Agent"), TERMINAL("Terminal"), FILES("Files") }
+private enum class Tab(val label: Int) { AGENT(R.string.tab_agent), TERMINAL(R.string.tab_terminal), FILES(R.string.tab_files) }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -121,15 +128,16 @@ fun RemoteControlScreen(uiState: RemoteUiState, actions: RemoteActions) {
     val clipboard = LocalClipboardManager.current
     var pendingToast by remember { mutableStateOf<String?>(null) }
 
-    val copy: (String, String) -> Unit = { text, label ->
+    val context = LocalContext.current
+    val copy: (String, Int) -> Unit = { text, label ->
         clipboard.setText(AnnotatedString(text))
         snackbar.currentSnackbarData?.dismiss()
-        pendingToast = "$label copied"
+        pendingToast = context.getString(R.string.copied, context.getString(label))
     }
 
     LaunchedEffect(uiState.toastMessage) {
         uiState.toastMessage?.let {
-            snackbar.showSnackbar(it)
+            snackbar.showSnackbar(it.resolve(context))
             actions.consumeToast()
         }
     }
@@ -173,7 +181,7 @@ fun RemoteControlScreen(uiState: RemoteUiState, actions: RemoteActions) {
     }
 
     uiState.openedFile?.let { file ->
-        FileViewerDialog(file = file, onCopy = { copy(file.content, "File") }, onDismiss = actions.closeFile)
+        FileViewerDialog(file = file, onCopy = { copy(file.content, R.string.label_file) }, onDismiss = actions.closeFile)
     }
 
     Scaffold(
@@ -186,7 +194,8 @@ fun RemoteControlScreen(uiState: RemoteUiState, actions: RemoteActions) {
                     actions.refreshWorkspaces()
                     showWorkspaces = true
                 },
-                onDisconnect = actions.disconnect
+                onDisconnect = actions.disconnect,
+                onOpenSettings = actions.openSettings
             )
         },
         bottomBar = {
@@ -205,7 +214,7 @@ fun RemoteControlScreen(uiState: RemoteUiState, actions: RemoteActions) {
                                 contentDescription = null
                             )
                         },
-                        label = { Text(item.label) },
+                        label = { Text(stringResource(item.label)) },
                         colors = NavigationBarItemDefaults.colors(indicatorColor = AccentBlue.copy(alpha = 0.18f))
                     )
                 }
@@ -246,12 +255,12 @@ fun RemoteControlScreen(uiState: RemoteUiState, actions: RemoteActions) {
 }
 
 @Composable
-private fun StatusBar(uiState: RemoteUiState, onWorkspaceClick: () -> Unit, onDisconnect: () -> Unit) {
+private fun StatusBar(uiState: RemoteUiState, onWorkspaceClick: () -> Unit, onDisconnect: () -> Unit, onOpenSettings: () -> Unit) {
     val (color, label) = when (uiState.connectionStatus) {
-        ConnectionStatus.CONNECTED -> StatusGreen to "Connected"
-        ConnectionStatus.CONNECTING -> StatusAmber to "Connecting"
-        ConnectionStatus.RECONNECTING -> StatusAmber to "Reconnecting"
-        ConnectionStatus.DISCONNECTED -> StatusRed to "Disconnected"
+        ConnectionStatus.CONNECTED -> StatusGreen to stringResource(R.string.status_connected)
+        ConnectionStatus.CONNECTING -> StatusAmber to stringResource(R.string.status_connecting)
+        ConnectionStatus.RECONNECTING -> StatusAmber to stringResource(R.string.status_reconnecting)
+        ConnectionStatus.DISCONNECTED -> StatusRed to stringResource(R.string.status_disconnected)
     }
     val status = uiState.bridgeStatus
     Surface(color = BgSecondary) {
@@ -268,7 +277,7 @@ private fun StatusBar(uiState: RemoteUiState, onWorkspaceClick: () -> Unit, onDi
                     Text(label, color = color, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
                     uiState.activeRoute?.let { route ->
                         Text(
-                            text = "via ${ConnectionProfile.routeKind(route)}",
+                            text = stringResource(R.string.via_route, stringResource(ConnectionProfile.routeKind(route))),
                             color = TextSecondary,
                             style = MaterialTheme.typography.labelMedium
                         )
@@ -289,19 +298,22 @@ private fun StatusBar(uiState: RemoteUiState, onWorkspaceClick: () -> Unit, onDi
                     modifier = Modifier.padding(top = 2.dp).clickable(onClick = onWorkspaceClick)
                 ) {
                     Text(
-                        text = status.workspaceName.ifEmpty { "Choose workspace" },
+                        text = status.workspaceName.ifEmpty { stringResource(R.string.choose_workspace) },
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false)
                     )
-                    Icon(Icons.Default.UnfoldMore, contentDescription = "Switch workspace", tint = TextSecondary, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.UnfoldMore, contentDescription = stringResource(R.string.switch_workspace), tint = TextSecondary, modifier = Modifier.size(18.dp))
                 }
             }
             AgentBadge(status.agent.state, status.agent.available)
+            IconButton(onClick = onOpenSettings) {
+                Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.settings), tint = TextSecondary)
+            }
             IconButton(onClick = onDisconnect) {
-                Icon(Icons.Default.PowerSettingsNew, contentDescription = "Disconnect", tint = TextSecondary)
+                Icon(Icons.Default.PowerSettingsNew, contentDescription = stringResource(R.string.disconnect), tint = TextSecondary)
             }
         }
     }
@@ -320,9 +332,9 @@ private fun AgentBadge(state: AgentState, available: Boolean) {
         else -> TextSecondary
     }
     val text = when {
-        !available -> "No agent"
-        ready -> "Ready"
-        else -> state.label
+        !available -> stringResource(R.string.agent_none)
+        ready -> stringResource(R.string.agent_ready)
+        else -> stringResource(state.label)
     }
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -352,17 +364,17 @@ private fun WorkspaceSheet(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Workspaces", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text(stringResource(R.string.workspaces), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                 if (uiState.bridgeStatus.ideInstalled) {
                     TextButton(onClick = { onOpenInIde(uiState.bridgeStatus.activeWorkspace) }) {
                         Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("Open in IDE")
+                        Text(stringResource(R.string.open_in_ide))
                     }
                 }
             }
             Text(
-                text = "The agent and terminal run in the selected folder.",
+                text = stringResource(R.string.workspaces_subtitle),
                 color = TextSecondary,
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
@@ -384,7 +396,7 @@ private fun WorkspaceSheet(
                     shape = RoundedCornerShape(12.dp)
                 )
                 TextButton(onClick = { if (customPath.isNotBlank()) onSelect(customPath.trim()) }, enabled = customPath.isNotBlank()) {
-                    Text("Open")
+                    Text(stringResource(R.string.open))
                 }
             }
         }
@@ -411,7 +423,7 @@ private fun WorkspaceRow(ws: WorkspaceItem, onSelect: (String) -> Unit) {
             Text(ws.name, fontWeight = FontWeight.SemiBold, color = if (ws.active) AccentBlue else TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(ws.path, color = TextSecondary, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        if (ws.active) Icon(Icons.Default.Check, contentDescription = "Active", tint = AccentBlue)
+        if (ws.active) Icon(Icons.Default.Check, contentDescription = stringResource(R.string.active), tint = AccentBlue)
     }
 }
 
@@ -429,18 +441,18 @@ private fun FileViewerDialog(file: FileContent, onCopy: () -> Unit, onDismiss: (
                     Column(modifier = Modifier.weight(1f)) {
                         Text(file.path.substringAfterLast('/'), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(
-                            text = "${file.path}  -  ${lines.size} lines${if (file.truncated) "  -  first 256 KB" else ""}",
+                            text = stringResource(R.string.file_meta, file.path, lines.size) + if (file.truncated) stringResource(R.string.file_truncated) else "",
                             color = TextSecondary,
                             style = MaterialTheme.typography.labelSmall,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
-                    IconButton(onClick = onCopy) { Icon(Icons.Default.ContentCopy, contentDescription = "Copy file") }
-                    IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, contentDescription = "Close") }
+                    IconButton(onClick = onCopy) { Icon(Icons.Default.ContentCopy, contentDescription = stringResource(R.string.copy_file)) }
+                    IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, contentDescription = stringResource(R.string.close)) }
                 }
                 HorizontalDivider(color = BgTertiary)
-                Box(
+                Ltr { Box(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
@@ -457,7 +469,7 @@ private fun FileViewerDialog(file: FileContent, onCopy: () -> Unit, onDismiss: (
                         color = TextPrimary,
                         modifier = Modifier.padding(end = 16.dp)
                     )
-                }
+                } }
             }
         }
     }

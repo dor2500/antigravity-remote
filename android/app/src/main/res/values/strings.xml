@@ -1,3 +1,176 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Antigravity Remote</string>
+    <string name="app_name" translatable="false">Antigravity Remote</string>
+
+    <!-- Connection screen -->
+    <string name="connect_subtitle">Control Antigravity on your PC from this phone</string>
+    <string name="saved_bridge">Your PC</string>
+    <string name="forget_saved_bridge">Forget this PC</string>
+    <string name="reconnect">Connect</string>
+    <string name="scan_qr">Scan the QR code</string>
+    <string name="enter_manually">Enter the address manually</string>
+    <string name="field_host">PC address</string>
+    <string name="field_host_hint">192.168.1.42 or https://...</string>
+    <string name="field_port">Port</string>
+    <string name="field_token">Token</string>
+    <string name="connecting_ellipsis">Connecting...</string>
+    <string name="connect">Connect</string>
+    <string name="how_to_pair">How to connect</string>
+    <string name="pair_step_1">1. On the PC, double-click start-bridge.bat</string>
+    <string name="pair_step_2">2. Tap Scan the QR code and point the camera at the code in its window</string>
+    <string name="pair_step_3">3. That is it. From now on the app finds the PC by itself, at home and away</string>
+    <string name="scan_title">Scan the QR code</string>
+    <string name="close_scanner">Close scanner</string>
+    <string name="camera_unavailable">Camera unavailable: %1$s</string>
+    <string name="scan_hint">Point the camera at the QR code in the bridge window on your PC</string>
+    <string name="error_bad_qr">That QR code is not an Antigravity Remote code</string>
+    <string name="update_open">Update</string>
+
+    <!-- Connection errors -->
+    <string name="error_unreachable">Cannot reach the PC. Make sure start-bridge.bat is running.</string>
+    <string name="error_timeout">The PC did not answer in time</string>
+    <string name="error_unknown_host">Unknown address</string>
+    <string name="error_token">The PC did not accept this phone. Scan the QR code again.</string>
+    <string name="error_locked_out">Too many failed attempts. Wait 10 minutes and try again.</string>
+    <string name="error_no_route">Cannot reach the PC right now. Trying again...</string>
+    <string name="error_not_connected">Not connected</string>
+
+    <!-- Status bar -->
+    <string name="status_connected">Connected</string>
+    <string name="status_connecting">Connecting</string>
+    <string name="status_reconnecting">Reconnecting</string>
+    <string name="status_disconnected">Disconnected</string>
+    <string name="via_route">via %1$s</string>
+    <string name="route_lan">home network</string>
+    <string name="route_tailscale">Tailscale</string>
+    <string name="route_internet">internet</string>
+    <string name="choose_workspace">Choose project</string>
+    <string name="switch_workspace">Switch project</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="settings">Settings</string>
+    <string name="agent_none">No agent</string>
+    <string name="agent_ready">Ready</string>
+    <string name="agent_offline">Offline</string>
+    <string name="agent_starting">Starting</string>
+    <string name="agent_idle">Idle</string>
+    <string name="agent_working">Working</string>
+    <string name="agent_needs_approval">Needs approval</string>
+    <string name="agent_error">Error</string>
+
+    <!-- Tabs -->
+    <string name="tab_agent">Agent</string>
+    <string name="tab_terminal">Terminal</string>
+    <string name="tab_files">Files</string>
+
+    <!-- Agent tab -->
+    <string name="ide_badge">IDE</string>
+    <string name="agent_default_title">Antigravity agent</string>
+    <string name="agent_sub_ide">Live from Antigravity IDE. Your messages go to this conversation.</string>
+    <string name="agent_sub_no_cli">Antigravity CLI (agy) was not found on the PC</string>
+    <string name="agent_sub_hint">Start with ! to run a command on the PC</string>
+    <plurals name="agent_queued">
+        <item quantity="one">%d message waiting</item>
+        <item quantity="other">%d messages waiting</item>
+    </plurals>
+    <string name="copy_output">Copy everything</string>
+    <string name="label_output">Output</string>
+    <string name="label_message">Message</string>
+    <string name="agent_empty">Write to the Antigravity agent on your PC. Its replies, the commands it runs and its approval requests show up here live.</string>
+    <string name="prompt_hint">Message the agent...</string>
+    <string name="prompt_hint_busy">Add a follow-up...</string>
+    <string name="send_prompt">Send</string>
+    <string name="session_options">More</string>
+    <string name="menu_ide_conversations">IDE conversations</string>
+    <string name="menu_ide_conversations_off">IDE conversations (IDE not running)</string>
+    <string name="menu_leave_ide">Leave IDE conversation</string>
+    <string name="menu_new_session">New conversation</string>
+    <string name="menu_retry">Send the last message again</string>
+    <string name="permission_title">The agent wants to %1$s</string>
+    <string name="verb_execute">run a command</string>
+    <string name="verb_edit">edit a file</string>
+    <string name="verb_delete">delete a file</string>
+    <string name="verb_fetch">open a web address</string>
+    <string name="verb_read">read a file</string>
+    <string name="verb_other">do something</string>
+    <string name="approve">Approve</string>
+    <string name="reject">Reject</string>
+    <string name="stop">Stop</string>
+    <string name="clear">Clear</string>
+    <string name="jump_to_latest">Jump to latest</string>
+    <string name="show_less">Show less</string>
+    <string name="show_all_lines">Show all %1$d lines</string>
+    <string name="copied">%1$s copied</string>
+
+    <!-- IDE conversations -->
+    <string name="ide_sheet_title">IDE conversations</string>
+    <string name="ide_sheet_subtitle">Pick a conversation from Antigravity IDE to follow it live and reply from the phone.</string>
+    <string name="ide_new_hint">Start a new IDE conversation...</string>
+    <string name="ide_new_start">Start</string>
+    <string name="ide_none">No conversations found. Is Antigravity IDE open on the PC?</string>
+    <string name="ide_running">running</string>
+    <string name="time_just_now">just now</string>
+    <string name="time_minutes">%1$d min ago</string>
+    <string name="time_hours">%1$d h ago</string>
+    <string name="time_days">%1$d d ago</string>
+    <string name="refresh">Refresh</string>
+
+    <!-- Terminal tab -->
+    <string name="terminal_ready">Ready</string>
+    <string name="terminal_running">Running: %1$s</string>
+    <string name="copy_terminal">Copy terminal output</string>
+    <string name="label_terminal_output">Terminal output</string>
+    <string name="label_line">Line</string>
+    <string name="clear_terminal">Clear terminal</string>
+    <string name="terminal_empty">Commands run in PowerShell in the project folder on your PC. While a command runs, what you type is sent to it.</string>
+    <string name="terminal_input_hint">Reply to the running command</string>
+    <string name="stop_command">Stop command</string>
+    <string name="send_input">Send</string>
+    <string name="run_command">Run</string>
+
+    <!-- Files tab and viewer -->
+    <string name="up_one_folder">Up one folder</string>
+    <string name="folder_empty">This folder is empty</string>
+    <string name="file_meta">%1$s  -  %2$d lines</string>
+    <string name="file_truncated">  -  first 256 KB</string>
+    <string name="copy_file">Copy file</string>
+    <string name="label_file">File</string>
+    <string name="close">Close</string>
+
+    <!-- Projects -->
+    <string name="workspaces">Projects</string>
+    <string name="open_in_ide">Open in IDE</string>
+    <string name="workspaces_subtitle">The agent and the terminal work in the project you choose.</string>
+    <string name="open">Open</string>
+    <string name="active">Active</string>
+    <string name="msg_opened_in_ide">Opened in Antigravity IDE</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="back">Back</string>
+    <string name="settings_language">Language</string>
+    <string name="language_system">Phone language</string>
+    <string name="language_hebrew">Hebrew</string>
+    <string name="language_english">English</string>
+    <string name="settings_updates">Updates</string>
+    <string name="app_version">App version %1$s</string>
+    <string name="check_updates">Check for updates</string>
+    <string name="checking_updates">Checking GitHub...</string>
+    <string name="up_to_date">You have the latest version</string>
+    <string name="update_available">Version %1$s is available</string>
+    <string name="update_download">Download and install</string>
+    <string name="update_downloading">Downloading %1$d%%</string>
+    <string name="update_verify_failed">The download was damaged. Try again.</string>
+    <string name="update_failed">Could not update: %1$s</string>
+    <string name="update_allow_installs">Allow Antigravity Remote to install updates, then tap Download and install again.</string>
+    <string name="whats_new">What is new</string>
+    <string name="bridge_version">PC side: version %1$s</string>
+    <string name="bridge_updates_itself">The PC side updates itself every time you start start-bridge.bat.</string>
+    <string name="settings_connection">Connection</string>
+    <string name="connection_routes">Ways to reach your PC</string>
+    <string name="connection_no_routes">No PC connected yet</string>
+    <string name="tailscale_title">Do I need Tailscale?</string>
+    <string name="tailscale_body">No. start-bridge.bat opens a secure tunnel by itself, so the app reaches your PC from anywhere, on Wi-Fi or mobile data, and finds it again after a restart without scanning. Tailscale is optional: if you install it on the PC and the phone with the same account, the app also uses it as a private, fixed route.</string>
+    <string name="tailscale_open">About Tailscale</string>
+    <string name="settings_about">About</string>
+    <string name="open_github">The project on GitHub</string>
 </resources>

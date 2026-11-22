@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.antigravity.remote.R
 import com.antigravity.remote.data.BridgeClient
 import com.antigravity.remote.data.BridgeStatus
 import com.antigravity.remote.data.Channel
@@ -16,6 +17,8 @@ import com.antigravity.remote.data.FileEntry
 import com.antigravity.remote.data.IdeConversation
 import com.antigravity.remote.data.LogEntry
 import com.antigravity.remote.data.PermissionRequest
+import com.antigravity.remote.data.UiText
+import com.antigravity.remote.data.UpdateChecker
 import com.antigravity.remote.data.WorkspaceItem
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -26,7 +29,7 @@ import org.json.JSONObject
 
 data class RemoteUiState(
     val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
-    val connectionError: String? = null,
+    val connectionError: UiText? = null,
     val savedProfile: ConnectionProfile? = null,
     val activeProfile: ConnectionProfile? = null,
     val bridgeStatus: BridgeStatus = BridgeStatus(),
@@ -38,10 +41,11 @@ data class RemoteUiState(
     val fileEntries: List<FileEntry> = emptyList(),
     val filesLoading: Boolean = false,
     val openedFile: FileContent? = null,
-    val toastMessage: String? = null,
+    val toastMessage: UiText? = null,
     val activeRoute: String? = null,
     val ideConversations: List<IdeConversation> = emptyList(),
-    val ideConversationsLoading: Boolean = false
+    val ideConversationsLoading: Boolean = false,
+    val update: UpdateChecker.State = UpdateChecker.State.Idle
 ) {
     val isOnline: Boolean
         get() = connectionStatus == ConnectionStatus.CONNECTED || connectionStatus == ConnectionStatus.RECONNECTING
@@ -55,7 +59,7 @@ class RemoteViewModel(application: Application) : AndroidViewModel(application) 
     val uiState: StateFlow<RemoteUiState> = _uiState.asStateFlow()
 
     private val client = BridgeClient(viewModelScope, object : BridgeClient.Listener {
-        override fun onConnectionState(status: ConnectionStatus, error: String?) {
+        override fun onConnectionState(status: ConnectionStatus, error: UiText?) {
             val wasConnected = _uiState.value.connectionStatus == ConnectionStatus.CONNECTED
             _uiState.update { it.copy(connectionStatus = status, connectionError = error) }
             if (status == ConnectionStatus.CONNECTED && !wasConnected) {
@@ -89,6 +93,11 @@ class RemoteViewModel(application: Application) : AndroidViewModel(application) 
                     Channel.TERMINAL -> it.copy(terminalLogs = emptyList())
                 }
             }
+        }
+
+        override fun onProfileUpdated(profile: ConnectionProfile) {
+            prefs.saveProfile(profile)
+            _uiState.update { it.copy(savedProfile = profile, activeProfile = profile) }
         }
 
         override fun onRoute(baseUrl: String?) {
@@ -139,7 +148,7 @@ class RemoteViewModel(application: Application) : AndroidViewModel(application) 
             )
         }.getOrNull()
         if (profile == null || profile.host.isEmpty() || profile.token.isEmpty()) {
-            _uiState.update { it.copy(connectionError = "That QR code is not an Antigravity Remote pairing code") }
+            _uiState.update { it.copy(connectionError = UiText.Res(R.string.error_bad_qr)) }
             return false
         }
         connect(profile)
@@ -163,34 +172,34 @@ class RemoteViewModel(application: Application) : AndroidViewModel(application) 
     fun sendPrompt(prompt: String) {
         if (prompt.isBlank()) return
         viewModelScope.launch {
-            client.sendPrompt(prompt).onFailure { toast(it.message ?: "Could not send the prompt") }
+            client.sendPrompt(prompt).onFailure { toast(it) }
         }
     }
 
     fun runTerminalCommand(command: String) {
         if (command.isBlank()) return
         viewModelScope.launch {
-            client.runTerminal(command).onFailure { toast(it.message ?: "Command failed") }
+            client.runTerminal(command).onFailure { toast(it) }
         }
     }
 
     fun sendTerminalInput(text: String) {
         viewModelScope.launch {
-            client.sendTerminalInput(text).onFailure { toast(it.message ?: "Could not send input") }
+            client.sendTerminalInput(text).onFailure { toast(it) }
         }
     }
 
     fun sendAction(action: String, target: Channel = Channel.AGENT) {
         viewModelScope.launch {
-            client.sendAction(action, target).onFailure { toast(it.message ?: "Action failed") }
+            client.sendAction(action, target).onFailure { toast(it) }
         }
     }
 
     fun openInIde(path: String? = null) {
         viewModelScope.launch {
             client.openInIde(path)
-                .onSuccess { toast("Opened in Antigravity IDE") }
-                .onFailure { toast(it.message ?: "Could not open the IDE") }
+                .onSuccess { _uiState.update { it.copy(toastMessage = UiText.Res(R.string.msg_opened_in_ide)) } }
+                .onFailure { toast(it) }
         }
     }
 
@@ -201,27 +210,27 @@ class RemoteViewModel(application: Application) : AndroidViewModel(application) 
                 .onSuccess { list -> _uiState.update { it.copy(ideConversations = list, ideConversationsLoading = false) } }
                 .onFailure { err ->
                     _uiState.update { it.copy(ideConversationsLoading = false) }
-                    toast(err.message ?: "Could not read IDE conversations")
+                    toast(err)
                 }
         }
     }
 
     fun openIdeConversation(id: String) {
         viewModelScope.launch {
-            client.openIdeConversation(id).onFailure { toast(it.message ?: "Could not open the conversation") }
+            client.openIdeConversation(id).onFailure { toast(it) }
         }
     }
 
     fun newIdeConversation(prompt: String) {
         if (prompt.isBlank()) return
         viewModelScope.launch {
-            client.newIdeConversation(prompt.trim()).onFailure { toast(it.message ?: "Could not start the conversation") }
+            client.newIdeConversation(prompt.trim()).onFailure { toast(it) }
         }
     }
 
     fun closeIdeConversation() {
         viewModelScope.launch {
-            client.closeIdeConversation().onFailure { toast(it.message ?: "Could not leave the conversation") }
+            client.closeIdeConversation().onFailure { toast(it) }
         }
     }
 
@@ -238,7 +247,7 @@ class RemoteViewModel(application: Application) : AndroidViewModel(application) 
                     loadWorkspaces()
                     loadFiles("")
                 }
-                .onFailure { toast(it.message ?: "Could not switch workspace") }
+                .onFailure { toast(it) }
         }
     }
 
@@ -249,7 +258,7 @@ class RemoteViewModel(application: Application) : AndroidViewModel(application) 
                 .onSuccess { entries -> _uiState.update { it.copy(fileEntries = entries, filesLoading = false) } }
                 .onFailure { err ->
                     _uiState.update { it.copy(filesLoading = false) }
-                    toast(err.message ?: "Could not list files")
+                    toast(err)
                 }
         }
     }
@@ -263,7 +272,7 @@ class RemoteViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             client.readFile(relativePath)
                 .onSuccess { content -> _uiState.update { it.copy(openedFile = content) } }
-                .onFailure { toast(it.message ?: "Could not read the file") }
+                .onFailure { toast(it) }
         }
     }
 
@@ -275,8 +284,27 @@ class RemoteViewModel(application: Application) : AndroidViewModel(application) 
         _uiState.update { it.copy(toastMessage = null) }
     }
 
-    private fun toast(message: String) {
-        _uiState.update { it.copy(toastMessage = message) }
+    private fun toast(err: Throwable) {
+        _uiState.update { it.copy(toastMessage = client.describe(err)) }
+    }
+
+    private val updater = UpdateChecker(application)
+
+    /** Checks GitHub Releases for a newer app version. */
+    fun checkForUpdate() {
+        _uiState.update { it.copy(update = UpdateChecker.State.Checking) }
+        viewModelScope.launch {
+            val result = updater.check()
+            _uiState.update { it.copy(update = result) }
+        }
+    }
+
+    /** Downloads the newer APK, verifies its checksum and opens the Android installer. */
+    fun installUpdate() {
+        val available = _uiState.value.update as? UpdateChecker.State.Available ?: return
+        viewModelScope.launch {
+            updater.downloadAndInstall(available.release) { state -> _uiState.update { it.copy(update = state) } }
+        }
     }
 
     override fun onCleared() {

@@ -1,5 +1,7 @@
 package com.antigravity.remote.ui.components
 
+import androidx.compose.ui.res.stringResource
+import com.antigravity.remote.R
 import androidx.compose.foundation.background
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
@@ -126,7 +128,7 @@ fun LogList(
                 contentColor = TextPrimary,
                 modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp)
             ) {
-                Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Jump to latest")
+                Icon(Icons.Default.KeyboardArrowDown, contentDescription = stringResource(R.string.jump_to_latest))
             }
         }
     }
@@ -155,23 +157,24 @@ fun AgentLogLine(entry: LogEntry) {
             Text(rendered, color = TextPrimary, fontSize = 14.sp, lineHeight = 20.sp)
         }
         "thought" -> ThoughtLine(entry.message)
-        "tool" -> Text(
+        "tool" -> Ltr { Text(
             text = entry.message,
             color = if (entry.message.startsWith("ok ")) TextSecondary else AccentPurple,
             fontFamily = Mono,
             fontSize = 12.sp,
             lineHeight = 16.sp,
             maxLines = 3,
-            overflow = TextOverflow.Ellipsis
-        )
-        "output" -> OutputBlock(entry.message)
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth()
+        ) }
+        "output" -> Ltr { OutputBlock(entry.message) }
         else -> StatusLine(entry)
     }
 }
 
 /** Terminal stream line: monospace, one entry per output line. */
 @Composable
-fun TerminalLogLine(entry: LogEntry) {
+fun TerminalLogLine(entry: LogEntry) = Ltr {
     val color = when (entry.level) {
         "user" -> AccentBlue
         "error" -> StatusRed
@@ -185,7 +188,8 @@ fun TerminalLogLine(entry: LogEntry) {
         fontFamily = Mono,
         fontSize = 12.sp,
         lineHeight = 16.sp,
-        fontWeight = if (entry.level == "user") FontWeight.SemiBold else FontWeight.Normal
+        fontWeight = if (entry.level == "user") FontWeight.SemiBold else FontWeight.Normal,
+        modifier = Modifier.fillMaxWidth()
     )
 }
 
@@ -230,7 +234,7 @@ private fun OutputBlock(text: String) {
         )
         if (collapsible) {
             Text(
-                text = if (expanded) "Show less" else "Show all $lineCount lines",
+                text = if (expanded) stringResource(R.string.show_less) else stringResource(R.string.show_all_lines, lineCount),
                 color = AccentBlue,
                 fontSize = 11.sp,
                 modifier = Modifier.padding(top = 6.dp)

@@ -1,5 +1,6 @@
 package com.antigravity.remote.data
 
+import com.antigravity.remote.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -17,24 +18,28 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.net.URLEncoder
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Talks to the Windows bridge: REST for commands, one WebSocket for the live event stream.
- * Reconnects with backoff until [disconnect] is called.
+ * Tries every saved route to the PC, asks the address relay when none answers, and reconnects
+ * with backoff until [disconnect] is called.
  */
 class BridgeClient(
     private val scope: CoroutineScope,
     private val listener: Listener
 ) {
     interface Listener {
-        fun onConnectionState(status: ConnectionStatus, error: String?)
+        fun onConnectionState(status: ConnectionStatus, error: UiText?)
         fun onStatus(status: BridgeStatus)
         fun onLog(entry: LogEntry)
         fun onClear(channel: Channel)
         fun onPermission(request: PermissionRequest?)
         fun onRoute(baseUrl: String?)
+        /** The relay reported new addresses for the PC; the caller should save them. */
+        fun onProfileUpdated(profile: ConnectionProfile)
     }
 
     private val http = OkHttpClient.Builder()
@@ -56,28 +61,33 @@ class BridgeClient(
     @Volatile private var profile: ConnectionProfile? = null
     @Volatile private var socket: WebSocket? = null
     @Volatile private var activeBase: String? = null
-    @Volatile private var wanted = false
     @Volatile private var everConnected = false
+    /** Changes on every connect/disconnect, so callbacks from an old attempt can tell they are stale. */
+    @Volatile private var generation = 0
     private var reconnectJob: Job? = null
     private var attempt = 0
 
     val activeProfile: ConnectionProfile? get() = profile
 
+    /** Language the bridge should use for its own messages. */
+    private val language: String get() = Locale.getDefault().language.let { if (it == "iw") "he" else it }
+
     fun connect(target: ConnectionProfile) {
-        wanted = true
+        val gen = ++generation
         everConnected = false
         attempt = 0
         profile = target
         reconnectJob?.cancel()
         socket?.cancel()
+        socket = null
         listener.onConnectionState(ConnectionStatus.CONNECTING, null)
         scope.launch(Dispatchers.IO) {
-            val found = findRoute(target)
-            if (profile != target) return@launch
+            val found = findRoute(gen)
+            if (gen != generation) return@launch
             if (found.isSuccess) {
-                openSocket(target)
+                openSocket(gen)
             } else {
-                wanted = false
+                generation++
                 profile = null
                 listener.onConnectionState(ConnectionStatus.DISCONNECTED, describe(found.exceptionOrNull()!!))
             }
@@ -85,12 +95,26 @@ class BridgeClient(
     }
 
     /**
-     * Tries every route to the PC (the last working one first) and keeps the first that answers
-     * with a valid status. A wrong token stops the search, since no route will accept it.
+     * Tries every route to the PC (the last working one first). When none answers, asks the
+     * address relay for the PC's current addresses (a new tunnel URL, for example) and tries those.
+     * A wrong token stops the search, since no route will accept it.
      */
-    private fun findRoute(target: ConnectionProfile): Result<String> {
-        val ordered = target.routes.let { routes -> listOfNotNull(activeBase?.takeIf { it in routes }) + routes }.distinct()
-        var lastError: Throwable = IOException("No route to the PC")
+    private fun findRoute(gen: Int): Result<String> {
+        val target = profile ?: return Result.failure(IOException("stale"))
+        val first = probeRoutes(target)
+        if (first.isSuccess || first.exceptionOrNull() is BridgeHttpException) return first
+        val relayed = AddressRelay.fetch(probe, target.token) ?: return first
+        if (gen != generation) return first
+        val updated = target.withRelayedRoutes(relayed)
+        if (updated.routes == target.routes) return first
+        profile = updated
+        listener.onProfileUpdated(updated)
+        return probeRoutes(updated).let { if (it.isSuccess) it else first }
+    }
+
+    private fun probeRoutes(target: ConnectionProfile): Result<String> {
+        val ordered = (listOfNotNull(activeBase?.takeIf { it in target.routes }) + target.routes).distinct()
+        var lastError: Throwable = IOException("No route")
         for (base in ordered) {
             val result = runCatching { execute(probe, request(target, base, "/api/status").get().build()) { parseStatus(it) } }
             result.onSuccess { status ->
@@ -100,24 +124,24 @@ class BridgeClient(
                 return Result.success(base)
             }
             lastError = result.exceptionOrNull() ?: lastError
-            if (lastError.message?.contains("token", ignoreCase = true) == true) break
+            if (lastError is BridgeHttpException) break
         }
         return Result.failure(lastError)
     }
 
     /** Skip the backoff wait, e.g. when the network comes back or the app returns to the foreground. */
     fun reconnectNow() {
-        val target = profile ?: return
-        if (!wanted || !everConnected || socket != null) return
+        if (profile == null || !everConnected || socket != null) return
+        val gen = generation
         reconnectJob?.cancel()
         attempt = 0
         reconnectJob = scope.launch(Dispatchers.IO) {
-            if (findRoute(target).isSuccess && wanted && profile == target && socket == null) openSocket(target)
+            if (findRoute(gen).isSuccess && gen == generation && socket == null) openSocket(gen)
         }
     }
 
     fun disconnect() {
-        wanted = false
+        generation++
         reconnectJob?.cancel()
         socket?.close(1000, "Disconnected by user")
         socket = null
@@ -127,56 +151,57 @@ class BridgeClient(
         listener.onConnectionState(ConnectionStatus.DISCONNECTED, null)
     }
 
-    private fun openSocket(target: ConnectionProfile) {
+    private fun openSocket(gen: Int) {
+        val target = profile ?: return
         val base = activeBase ?: target.routes.first()
-        val request = Request.Builder().url(target.wsUrl(base)).build()
+        val request = Request.Builder().url(target.wsUrl(base) + "&lang=" + language).build()
         socket = http.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                if (profile != target) return
+                if (gen != generation) return
                 attempt = 0
                 everConnected = true
                 listener.onConnectionState(ConnectionStatus.CONNECTED, null)
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                if (profile == target) handleEvent(text)
+                if (gen == generation) handleEvent(text)
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                 webSocket.close(1000, null)
-                if (code == 4001 || code == 4029) {
-                    wanted = false
+                if ((code == 4001 || code == 4029) && gen == generation) {
+                    generation++
                     profile = null
-                    val message = if (code == 4001) "The bridge rejected the token. Scan the QR code again." else "Too many failed attempts. Wait 10 minutes and try again."
-                    listener.onConnectionState(ConnectionStatus.DISCONNECTED, message)
+                    val message = if (code == 4001) R.string.error_token else R.string.error_locked_out
+                    listener.onConnectionState(ConnectionStatus.DISCONNECTED, UiText.Res(message))
                 }
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                lost(webSocket, target, null)
+                lost(webSocket, gen, null)
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                lost(webSocket, target, describe(t))
+                lost(webSocket, gen, describe(t))
             }
         })
     }
 
-    private fun lost(webSocket: WebSocket, target: ConnectionProfile, reason: String?) {
+    private fun lost(webSocket: WebSocket, gen: Int, reason: UiText?) {
         if (socket === webSocket) socket = null
-        if (!wanted || profile != target) return
+        if (gen != generation || profile == null) return
         listener.onConnectionState(ConnectionStatus.RECONNECTING, reason)
         val wait = (1000L shl attempt.coerceAtMost(3)).coerceAtMost(8000L)
         attempt += 1
         reconnectJob?.cancel()
         reconnectJob = scope.launch(Dispatchers.IO) {
             delay(wait)
-            if (!wanted || profile != target || socket != null) return@launch
+            if (gen != generation || socket != null) return@launch
             // The network may have changed (Wi-Fi to mobile data): look for a route that works now.
-            if (findRoute(target).isSuccess) {
-                if (wanted && profile == target && socket == null) openSocket(target)
+            if (findRoute(gen).isSuccess) {
+                if (gen == generation && socket == null) openSocket(gen)
             } else {
-                lost(webSocket, target, "No route to the PC right now")
+                lost(webSocket, gen, UiText.Res(R.string.error_no_route))
             }
         }
     }
@@ -276,7 +301,7 @@ class BridgeClient(
     }
 
     private suspend fun <T> call(target: ConnectionProfile? = profile, block: (ConnectionProfile) -> T): Result<T> {
-        val p = target ?: return Result.failure(IllegalStateException("Not connected"))
+        val p = target ?: return Result.failure(NotConnectedException())
         return withContext(Dispatchers.IO) { runCatching { block(p) } }
     }
 
@@ -287,21 +312,16 @@ class BridgeClient(
         execute(http, request(p, activeBase ?: p.routes.first(), path).post(body.toString().toRequestBody(json)).build(), parse)
 
     private fun request(p: ConnectionProfile, base: String, path: String): Request.Builder =
-        Request.Builder().url(base + path).header("Authorization", "Bearer ${p.token}")
+        Request.Builder().url(base + path)
+            .header("Authorization", "Bearer ${p.token}")
+            .header("X-App-Language", language)
 
     private fun <T> execute(client: OkHttpClient, request: Request, parse: (JSONObject) -> T): T {
         client.newCall(request).execute().use { response ->
             val text = response.body?.string().orEmpty()
             val body = runCatching { JSONObject(text) }.getOrElse { JSONObject() }
             if (!response.isSuccessful) {
-                val message = body.optString("error").ifEmpty {
-                    when (response.code) {
-                        401 -> "Token rejected by the bridge"
-                        429 -> "Too many failed attempts. Wait 10 minutes and try again."
-                        else -> "HTTP ${response.code}"
-                    }
-                }
-                throw IOException(message)
+                throw BridgeHttpException(response.code, body.optString("error").ifEmpty { "HTTP ${response.code}" })
             }
             return parse(body)
         }
@@ -341,11 +361,17 @@ class BridgeClient(
         detail = data.optString("detail")
     )
 
-    private fun describe(err: Throwable): String = when (err) {
-        is java.net.ConnectException -> "Cannot reach the bridge. Is it running, and is the phone on the same network?"
-        is java.net.SocketTimeoutException -> "The bridge did not answer in time"
-        is java.net.UnknownHostException -> "Unknown host"
-        else -> err.message ?: err.javaClass.simpleName
+    /** A message for the user explaining why talking to the PC failed. */
+    fun describe(err: Throwable): UiText = when {
+        err is BridgeHttpException && err.code == 401 -> UiText.Res(R.string.error_token)
+        err is BridgeHttpException && err.code == 429 -> UiText.Res(R.string.error_locked_out)
+        err is BridgeHttpException -> UiText.Raw(err.message ?: "HTTP ${err.code}")
+        err is NotConnectedException -> UiText.Res(R.string.error_not_connected)
+        err is java.net.ConnectException || err is java.net.NoRouteToHostException -> UiText.Res(R.string.error_unreachable)
+        err is java.net.SocketTimeoutException -> UiText.Res(R.string.error_timeout)
+        err is java.net.UnknownHostException -> UiText.Res(R.string.error_unknown_host)
+        err.message.isNullOrBlank() || err.message == "No route" -> UiText.Res(R.string.error_unreachable)
+        else -> UiText.Raw(err.message!!)
     }
 
     private fun clock(iso: String): String {
@@ -359,3 +385,5 @@ private fun JSONArray?.objects(): List<JSONObject> =
 
 private fun JSONObject.optNullableString(key: String): String? =
     if (isNull(key)) null else optString(key).takeIf { it.isNotEmpty() }
+
+private class NotConnectedException : IOException("Not connected")

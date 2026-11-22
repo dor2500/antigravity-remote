@@ -1,5 +1,7 @@
 package com.antigravity.remote.data
 
+import androidx.annotation.StringRes
+import com.antigravity.remote.R
 import java.net.URLEncoder
 
 enum class ConnectionStatus {
@@ -32,6 +34,13 @@ data class ConnectionProfile(
     val routes: List<String> get() = (listOf(host) + extraRoutes).map { baseUrlFor(it, port) }.distinct()
     val label: String get() = if (host.startsWith("http")) host.removePrefix("https://").removePrefix("http://") else "$host:$port"
 
+    /** The same PC with the addresses the relay reported (LAN, Tailscale, tunnel), deduplicated. */
+    fun withRelayedRoutes(relayed: AddressRelay.Routes): ConnectionProfile {
+        val fresh = relayed.hosts + listOfNotNull(relayed.url)
+        val first = fresh.firstOrNull() ?: return this
+        return copy(host = first, port = relayed.port, extraRoutes = fresh.drop(1).filter { it != first }.distinct())
+    }
+
     fun wsUrl(baseUrl: String): String =
         baseUrl.replaceFirst(Regex("^http"), "ws") + "/ws?token=" + URLEncoder.encode(token, "UTF-8")
 
@@ -43,14 +52,15 @@ data class ConnectionProfile(
             return "http://$host:$port"
         }
 
-        /** Short label for where a route goes: LAN, Tailscale or Internet. */
-        fun routeKind(baseUrl: String): String {
+        /** Where a route goes: the home network, Tailscale or the internet (a tunnel). */
+        @StringRes
+        fun routeKind(baseUrl: String): Int {
             val host = baseUrl.substringAfter("://").substringBefore('/').substringBeforeLast(':').trim('[', ']')
             return when {
-                baseUrl.startsWith("https://") -> "Internet"
-                Regex("^100\\.(6[4-9]|[7-9]\\d|1[01]\\d|12[0-7])\\.").containsMatchIn(host) -> "Tailscale"
-                host.endsWith(".ts.net") -> "Tailscale"
-                else -> "LAN"
+                baseUrl.startsWith("https://") -> R.string.route_internet
+                Regex("^100\\.(6[4-9]|[7-9]\\d|1[01]\\d|12[0-7])\\.").containsMatchIn(host) -> R.string.route_tailscale
+                host.endsWith(".ts.net") -> R.string.route_tailscale
+                else -> R.string.route_lan
             }
         }
     }
@@ -71,13 +81,13 @@ data class PermissionRequest(
     val detail: String
 )
 
-enum class AgentState(val wire: String, val label: String) {
-    OFFLINE("offline", "Offline"),
-    STARTING("starting", "Starting"),
-    IDLE("idle", "Idle"),
-    WORKING("working", "Working"),
-    AWAITING_PERMISSION("awaiting_permission", "Needs approval"),
-    ERROR("error", "Error");
+enum class AgentState(val wire: String, @StringRes val label: Int) {
+    OFFLINE("offline", R.string.agent_offline),
+    STARTING("starting", R.string.agent_starting),
+    IDLE("idle", R.string.agent_idle),
+    WORKING("working", R.string.agent_working),
+    AWAITING_PERMISSION("awaiting_permission", R.string.agent_needs_approval),
+    ERROR("error", R.string.agent_error);
 
     companion object {
         fun from(value: String?): AgentState = entries.firstOrNull { it.wire == value } ?: OFFLINE

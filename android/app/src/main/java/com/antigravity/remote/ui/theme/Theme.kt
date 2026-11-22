@@ -1,6 +1,9 @@
 package com.antigravity.remote.ui.theme
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Typography
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
@@ -37,10 +40,26 @@ private val AntigravityDarkColorScheme = darkColorScheme(
     onError = Color.White,
 )
 
+/**
+ * Every text style picks its direction from its own content, so English replies, code and
+ * paths read left-to-right and Hebrew reads right-to-left, whatever the app language is.
+ */
+private val ContentDirectionTypography: Typography = Typography().run {
+    fun TextStyle.content() = copy(textDirection = TextDirection.Content)
+    copy(
+        displayLarge = displayLarge.content(), displayMedium = displayMedium.content(), displaySmall = displaySmall.content(),
+        headlineLarge = headlineLarge.content(), headlineMedium = headlineMedium.content(), headlineSmall = headlineSmall.content(),
+        titleLarge = titleLarge.content(), titleMedium = titleMedium.content(), titleSmall = titleSmall.content(),
+        bodyLarge = bodyLarge.content(), bodyMedium = bodyMedium.content(), bodySmall = bodySmall.content(),
+        labelLarge = labelLarge.content(), labelMedium = labelMedium.content(), labelSmall = labelSmall.content()
+    )
+}
+
 @Composable
 fun AntigravityRemoteTheme(content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = AntigravityDarkColorScheme,
+        typography = ContentDirectionTypography,
         content = content
     )
 }

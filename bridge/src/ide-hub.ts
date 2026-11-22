@@ -3,6 +3,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { AgentState } from "./agent";
+import { t } from "./i18n";
 import { EventHub } from "./events";
 import { commandLine } from "./proc";
 
@@ -136,13 +137,13 @@ export class IdeHubSession {
     if (!id) throw new Error("Conversation id is required");
     const conversations = await this.list();
     const match = conversations.find((c) => c.id === id);
-    if (!match) throw new Error("That conversation was not found in Antigravity");
+    if (!match) throw new Error(t("That conversation was not found in Antigravity"));
     this.close();
     this.activeId = id;
     this.title = match.title;
     this.lastError = null;
     this.hub.emit({ type: "clear", channel: "agent" });
-    this.hub.log("agent", "system", `Following IDE conversation: ${match.title}`);
+    this.hub.log("agent", "system", t("Following the IDE conversation: {0}", match.title));
     await this.poll(true);
     this.schedulePoll();
     return match.title;
@@ -151,8 +152,8 @@ export class IdeHubSession {
   /** Start a new conversation in the IDE with this prompt, then follow it. */
   async create(prompt: string): Promise<string> {
     const hubInfo = this.connect();
-    if (!hubInfo) throw new Error("Antigravity IDE is not running on the PC");
-    if (!this.agentCommand) throw new Error("Antigravity CLI (agy) not found");
+    if (!hubInfo) throw new Error(t("Antigravity IDE is not running on the PC"));
+    if (!this.agentCommand) throw new Error(t("Antigravity CLI (agy) was not found on the PC. Install Antigravity and run agy once."));
     const output = await runAgentApi(this.agentCommand, hubInfo, ["new-conversation", prompt]);
     let id = "";
     try {
@@ -160,7 +161,7 @@ export class IdeHubSession {
     } catch {
       id = "";
     }
-    if (!id) throw new Error(`Antigravity did not create a conversation: ${output.slice(0, 200)}`);
+    if (!id) throw new Error(`${t("Antigravity did not create the conversation")}: ${output.slice(0, 200)}`);
     return this.open(id);
   }
 
@@ -188,7 +189,7 @@ export class IdeHubSession {
   async stop(): Promise<string> {
     const id = this.requireActive();
     await this.call("CancelCascadeInvocation", { cascadeId: id });
-    this.hub.log("agent", "action", "Stop requested");
+    this.hub.log("agent", "action", t("Stopping"));
     this.schedulePoll(300);
     return "Cancelling the current IDE turn";
   }
@@ -206,7 +207,7 @@ export class IdeHubSession {
     const waiting = this.waiting;
     const verb = allow ? "Approved" : "Rejected";
     if (!waiting) {
-      this.hub.log("agent", "action", `${verb}: nothing is waiting for approval`);
+      this.hub.log("agent", "action", t("Nothing is waiting for approval"));
       return "Nothing is waiting for approval";
     }
     const interaction: Record<string, unknown> = { trajectoryId: this.trajectoryId ?? "", stepIndex: waiting.index };
@@ -220,7 +221,7 @@ export class IdeHubSession {
       interaction.permission = { allow };
     }
     await this.call("HandleCascadeUserInteraction", { conversationId: id, interaction });
-    this.hub.log("agent", "action", `${verb}: ${shorten(waiting.title)}`);
+    this.hub.log("agent", "action", allow ? t("Approved: {0}", shorten(waiting.title)) : t("Rejected: {0}", shorten(waiting.title)));
     this.setWaiting(null);
     this.setState("working");
     this.schedulePoll(300);
@@ -228,7 +229,7 @@ export class IdeHubSession {
   }
 
   private requireActive(): string {
-    if (!this.activeId) throw new Error("No IDE conversation is open");
+    if (!this.activeId) throw new Error(t("No IDE conversation is open"));
     return this.activeId;
   }
 
@@ -260,7 +261,6 @@ export class IdeHubSession {
       this.runStatus = String(summary?.status ?? "");
       const steps: any[] = Array.isArray(stepsResult?.steps) ? stepsResult.steps : [];
       steps.forEach((step, index) => this.renderStep(id, index, step));
-      if (initial) this.hub.log("agent", "system", "Live. New messages go to this IDE conversation.");
 
       let waiting: WaitingStep | null = null;
       steps.forEach((step, index) => {
@@ -272,7 +272,7 @@ export class IdeHubSession {
       this.lastError = null;
     } catch (err) {
       const message = (err as Error).message;
-      if (message !== this.lastError) this.hub.log("agent", "error", `IDE connection: ${message}`);
+      if (message !== this.lastError) this.hub.log("agent", "error", t("Lost contact with the IDE: {0}", message));
       this.lastError = message;
       this.setState("error");
     } finally {
@@ -303,7 +303,7 @@ export class IdeHubSession {
     this.waiting = waiting;
     if (before === after) return;
     if (waiting) {
-      this.hub.log("agent", "action", `Approval needed: ${shorten(waiting.title)}`);
+      this.hub.log("agent", "action", t("Approval needed: {0}", shorten(waiting.title)));
       this.hub.emit({ type: "permission", channel: "agent", data: this.permission as unknown as Record<string, unknown> });
     } else {
       this.hub.emit({ type: "permission_resolved", channel: "agent" });
@@ -324,7 +324,7 @@ export class IdeHubSession {
 
   private async call(method: string, body: unknown): Promise<any> {
     const info = this.connect();
-    if (!info) throw new Error("Antigravity IDE is not running on the PC");
+    if (!info) throw new Error(t("Antigravity IDE is not running on the PC"));
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 20000);
     try {

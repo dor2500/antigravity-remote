@@ -1,4 +1,5 @@
 import fs from "fs";
+import { t } from "./i18n";
 import path from "path";
 
 export interface FileEntry {
@@ -31,7 +32,7 @@ function resolveSafePath(workspaceRoot: string, relativePath: string): string {
     target !== normalizedRoot &&
     !target.startsWith(normalizedRoot + path.sep)
   ) {
-    throw new Error("Access denied: path is outside active workspace");
+    throw new Error(t("Access denied: that path is outside the project"));
   }
   return target;
 }
@@ -39,7 +40,7 @@ function resolveSafePath(workspaceRoot: string, relativePath: string): string {
 export function listDirectory(workspaceRoot: string, relativePath = ""): FileEntry[] {
   const targetDir = resolveSafePath(workspaceRoot, relativePath);
   if (!fs.existsSync(targetDir) || !fs.statSync(targetDir).isDirectory()) {
-    throw new Error("Directory not found");
+    throw new Error(t("Folder not found"));
   }
 
   const dirents = fs.readdirSync(targetDir, { withFileTypes: true });
@@ -82,7 +83,7 @@ export function readFileContent(
 ): { path: string; content: string; truncated: boolean; size: number } {
   const targetFile = resolveSafePath(workspaceRoot, relativePath);
   if (!fs.existsSync(targetFile) || fs.statSync(targetFile).isDirectory()) {
-    throw new Error("File not found");
+    throw new Error(t("File not found"));
   }
 
   const stat = fs.statSync(targetFile);
