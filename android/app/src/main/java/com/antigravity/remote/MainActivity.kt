@@ -41,7 +41,11 @@ class MainActivity : ComponentActivity() {
                         openFile = vm::openFile,
                         closeFile = vm::closeOpenedFile,
                         disconnect = vm::disconnect,
-                        consumeToast = vm::consumeToast
+                        consumeToast = vm::consumeToast,
+                        loadIdeConversations = vm::loadIdeConversations,
+                        openIdeConversation = vm::openIdeConversation,
+                        newIdeConversation = vm::newIdeConversation,
+                        closeIdeConversation = vm::closeIdeConversation
                     )
                 }
                 if (uiState.isOnline) {

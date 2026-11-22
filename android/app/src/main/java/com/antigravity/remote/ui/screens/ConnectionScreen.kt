@@ -149,7 +149,7 @@ fun ConnectionScreen(
                                 color = AccentBlue
                             )
                             Text(
-                                text = "${saved.host}:${saved.port}",
+                                text = saved.label,
                                 style = MaterialTheme.typography.bodyLarge,
                                 fontWeight = FontWeight.SemiBold
                             )
@@ -216,8 +216,8 @@ fun ConnectionScreen(
             OutlinedTextField(
                 value = host,
                 onValueChange = { host = it },
-                label = { Text("Host / HTTPS URL / LAN / Tailscale IP") },
-                placeholder = { Text("https://...trycloudflare.com or 192.168.1.42") },
+                label = { Text("PC address: LAN IP, Tailscale IP or https URL") },
+                placeholder = { Text("192.168.1.42 or https://...trycloudflare.com") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -263,7 +263,13 @@ fun ConnectionScreen(
                             ConnectionProfile(
                                 host = host.trim(),
                                 port = parsedPort,
-                                token = token.trim()
+                                token = token.trim(),
+                                // Keep the other routes from the QR code (Tailscale, public URL) for the same PC.
+                                extraRoutes = uiState.savedProfile
+                                    ?.takeIf { it.token == token.trim() }
+                                    ?.extraRoutes
+                                    ?.filter { it != host.trim() }
+                                    .orEmpty()
                             )
                         )
                     }
@@ -314,9 +320,9 @@ private fun PairingHint() {
     ) {
         Text("How to pair", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
         listOf(
-            "1. On the PC, double-click start-bridge-remote.bat (works from anywhere) or start-bridge.bat (LAN)",
+            "1. On the PC, double-click start-bridge-remote.bat (works from anywhere) or start-bridge.bat (home network)",
             "2. Tap Scan Bridge QR Code and point at the code it prints",
-            "3. Supports HTTPS tunnels, LAN Wi-Fi, and Tailscale / VPN"
+            "3. The app remembers every route to the PC and switches between Wi-Fi, Tailscale and the tunnel by itself"
         ).forEach {
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }

@@ -73,10 +73,13 @@ fun AgentTab(
     uiState: RemoteUiState,
     onSendPrompt: (String) -> Unit,
     onAction: (String) -> Unit,
-    onCopy: (String, String) -> Unit
+    onCopy: (String, String) -> Unit,
+    onShowIdeConversations: () -> Unit,
+    onLeaveIdeConversation: () -> Unit
 ) {
     var prompt by rememberSaveable { mutableStateOf("") }
     val agent = uiState.bridgeStatus.agent
+    val inIde = agent.mode == "ide"
     val busy = agent.state == AgentState.WORKING || agent.state == AgentState.AWAITING_PERMISSION || agent.state == AgentState.STARTING
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -85,14 +88,29 @@ fun AgentTab(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = agent.title ?: "Antigravity agent",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = TextPrimary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (inIde) {
+                        Text(
+                            text = "IDE",
+                            color = AccentBlue,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier
+                                .padding(end = 6.dp)
+                                .background(AccentBlue.copy(alpha = 0.16f), RoundedCornerShape(4.dp))
+                                .padding(horizontal = 5.dp, vertical = 1.dp)
+                        )
+                    }
+                    Text(
+                        text = agent.title ?: "Antigravity agent",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
                 val sub = when {
+                    inIde -> "Live from Antigravity IDE. Messages go to this conversation."
                     !agent.available -> "Antigravity CLI (agy) not found on the PC"
                     agent.queued > 0 -> "${agent.queued} prompt${if (agent.queued == 1) "" else "s"} queued"
                     else -> "Prefix with ! to run a shell command"
@@ -102,7 +120,13 @@ fun AgentTab(
             IconButton(onClick = { onCopy(uiState.agentLogs.copyText(), "Output") }) {
                 Icon(Icons.Default.ContentCopy, contentDescription = "Copy output", tint = TextSecondary, modifier = Modifier.size(18.dp))
             }
-            SessionMenu(onAction)
+            SessionMenu(
+                inIde = inIde,
+                ideAvailable = uiState.bridgeStatus.ideConversations,
+                onAction = onAction,
+                onShowIdeConversations = onShowIdeConversations,
+                onLeaveIdeConversation = onLeaveIdeConversation
+            )
         }
 
         LogList(
@@ -165,15 +189,30 @@ fun AgentTab(
 }
 
 @Composable
-private fun SessionMenu(onAction: (String) -> Unit) {
+private fun SessionMenu(
+    inIde: Boolean,
+    ideAvailable: Boolean,
+    onAction: (String) -> Unit,
+    onShowIdeConversations: () -> Unit,
+    onLeaveIdeConversation: () -> Unit
+) {
     var open by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { open = true }) {
             Icon(Icons.Default.MoreVert, contentDescription = "Session options", tint = TextSecondary)
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = BgTertiary) {
-            DropdownMenuItem(text = { Text("New session") }, onClick = { open = false; onAction("restart") })
-            DropdownMenuItem(text = { Text("Retry last prompt") }, onClick = { open = false; onAction("retry") })
+            DropdownMenuItem(
+                text = { Text(if (ideAvailable) "IDE conversations" else "IDE conversations (IDE not running)") },
+                enabled = ideAvailable,
+                onClick = { open = false; onShowIdeConversations() }
+            )
+            if (inIde) {
+                DropdownMenuItem(text = { Text("Leave IDE conversation") }, onClick = { open = false; onLeaveIdeConversation() })
+            } else {
+                DropdownMenuItem(text = { Text("New session") }, onClick = { open = false; onAction("restart") })
+                DropdownMenuItem(text = { Text("Retry last prompt") }, onClick = { open = false; onAction("retry") })
+            }
         }
     }
 }

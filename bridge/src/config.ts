@@ -20,14 +20,18 @@ export interface BridgeConfig {
   advertiseHost?: string;
   /** PC name shown in the app. Defaults to the Windows computer name. */
   displayName?: string;
+  /** Public https URL that reaches this bridge (a tunnel or reverse proxy), offered to the phone as a fallback route. */
+  publicUrl?: string;
 }
 
 export interface CliOptions {
   port?: number;
   workspace?: string;
   host?: string;
-  url?: string;
   name?: string;
+  /** Public URL for this run only (start-bridge-remote.bat passes its tunnel address here). */
+  url?: string;
+  publicUrl?: string;
   resetToken: boolean;
 }
 
@@ -46,8 +50,9 @@ export function parseCli(argv: string[]): CliOptions {
     port: Number.isInteger(port) && port > 0 && port < 65536 ? port : undefined,
     workspace: value("--workspace"),
     host: value("--host"),
-    url: value("--url"),
     name: value("--name"),
+    url: value("--url"),
+    publicUrl: value("--public-url"),
     resetToken: argv.includes("--reset-token"),
   };
 }
@@ -181,9 +186,25 @@ export function loadOrCreateConfig(cli: CliOptions): BridgeConfig {
     ideCli: stored.ideCli,
     advertiseHost: cli.host ?? stored.advertiseHost,
     displayName: cli.name ?? stored.displayName,
+    publicUrl: normalizeUrl(stored.publicUrl),
   };
   saveConfig(config);
   return config;
+}
+
+export function normalizeUrl(value: string | undefined): string | undefined {
+  if (!value || !value.trim()) return undefined;
+  const trimmed = value.trim().replace(/\/+$/, "");
+  if (!/^https?:\/\//i.test(trimmed)) {
+    console.warn(`[bridge] publicUrl must start with https:// - ignoring "${value}"`);
+    return undefined;
+  }
+  return trimmed;
+}
+
+/** Tailscale's address range (100.64.0.0/10). */
+export function isTailscaleAddress(ip: string): boolean {
+  return /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(ip);
 }
 
 export function saveConfig(config: BridgeConfig): void {

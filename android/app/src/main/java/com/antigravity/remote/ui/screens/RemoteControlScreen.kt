@@ -71,6 +71,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.antigravity.remote.data.AgentState
 import com.antigravity.remote.data.Channel
+import com.antigravity.remote.data.ConnectionProfile
 import com.antigravity.remote.data.ConnectionStatus
 import com.antigravity.remote.data.FileContent
 import com.antigravity.remote.data.LogEntry
@@ -101,7 +102,11 @@ data class RemoteActions(
     val openFile: (String) -> Unit,
     val closeFile: () -> Unit,
     val disconnect: () -> Unit,
-    val consumeToast: () -> Unit
+    val consumeToast: () -> Unit,
+    val loadIdeConversations: () -> Unit,
+    val openIdeConversation: (String) -> Unit,
+    val newIdeConversation: (String) -> Unit,
+    val closeIdeConversation: () -> Unit
 )
 
 private enum class Tab(val label: String) { AGENT("Agent"), TERMINAL("Terminal"), FILES("Files") }
@@ -111,6 +116,7 @@ private enum class Tab(val label: String) { AGENT("Agent"), TERMINAL("Terminal")
 fun RemoteControlScreen(uiState: RemoteUiState, actions: RemoteActions) {
     var tab by rememberSaveable { mutableStateOf(Tab.AGENT) }
     var showWorkspaces by remember { mutableStateOf(false) }
+    var showIdeConversations by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
     val clipboard = LocalClipboardManager.current
     var pendingToast by remember { mutableStateOf<String?>(null) }
@@ -136,6 +142,22 @@ fun RemoteControlScreen(uiState: RemoteUiState, actions: RemoteActions) {
     BackHandler(enabled = tab == Tab.FILES && uiState.currentFilePath.isNotEmpty()) { actions.navigateUp() }
     BackHandler(enabled = tab != Tab.AGENT && !(tab == Tab.FILES && uiState.currentFilePath.isNotEmpty())) {
         tab = Tab.AGENT
+    }
+
+    if (showIdeConversations) {
+        IdeConversationSheet(
+            uiState = uiState,
+            onDismiss = { showIdeConversations = false },
+            onRefresh = actions.loadIdeConversations,
+            onOpen = {
+                actions.openIdeConversation(it)
+                showIdeConversations = false
+            },
+            onNew = {
+                actions.newIdeConversation(it)
+                showIdeConversations = false
+            }
+        )
     }
 
     if (showWorkspaces) {
@@ -196,7 +218,12 @@ fun RemoteControlScreen(uiState: RemoteUiState, actions: RemoteActions) {
                     uiState = uiState,
                     onSendPrompt = actions.sendPrompt,
                     onAction = { actions.sendAction(it, Channel.AGENT) },
-                    onCopy = copy
+                    onCopy = copy,
+                    onShowIdeConversations = {
+                        actions.loadIdeConversations()
+                        showIdeConversations = true
+                    },
+                    onLeaveIdeConversation = actions.closeIdeConversation
                 )
                 Tab.TERMINAL -> TerminalTab(
                     uiState = uiState,
@@ -239,6 +266,13 @@ private fun StatusBar(uiState: RemoteUiState, onWorkspaceClick: () -> Unit, onDi
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     StatusDot(color)
                     Text(label, color = color, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                    uiState.activeRoute?.let { route ->
+                        Text(
+                            text = "via ${ConnectionProfile.routeKind(route)}",
+                            color = TextSecondary,
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
                     val host = status.hostname.ifEmpty { uiState.activeProfile?.host.orEmpty() }
                     if (host.isNotEmpty()) {
                         Text(

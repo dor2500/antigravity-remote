@@ -7,16 +7,19 @@ import path from "path";
 import qrcode from "qrcode-terminal";
 import { WebSocket, WebSocketServer } from "ws";
 import { AgentSession, resolveAgentCommand } from "./agent";
-import { CONFIG_PATH, listAddresses, loadOrCreateConfig, parseCli, saveConfig } from "./config";
+import { CONFIG_PATH, isTailscaleAddress, listAddresses, loadOrCreateConfig, normalizeUrl, parseCli, saveConfig } from "./config";
 import { EventHub, StreamEvent } from "./events";
 import { listDirectory, readFileContent } from "./files";
 import { IdeIntegration } from "./ide";
+import { IdeHubSession } from "./ide-hub";
 import { TerminalSession } from "./terminal";
 
-const VERSION = "1.0.0";
+const VERSION = "1.2.0";
 
 const cli = parseCli(process.argv.slice(2));
 const config = loadOrCreateConfig(cli);
+// A tunnel URL passed for this run (start-bridge-remote.bat) wins over the one saved in the config.
+const publicUrl = normalizeUrl(cli.url ?? cli.publicUrl) ?? config.publicUrl;
 let addresses: Awaited<ReturnType<typeof listAddresses>> = [];
 let advertisedHost = config.advertiseHost || "127.0.0.1";
 
@@ -30,7 +33,9 @@ const scheduleStatus = (): void => {
     hub.emit({ type: "status", data: buildStatus() });
   }, 50);
 };
-const agent = new AgentSession(hub, () => config.activeWorkspace, resolveAgentCommand(config.agentCommand), scheduleStatus);
+const agentCommand = resolveAgentCommand(config.agentCommand);
+const agent = new AgentSession(hub, () => config.activeWorkspace, agentCommand, scheduleStatus);
+const ideChat = new IdeHubSession(hub, agentCommand, scheduleStatus);
 const terminal = new TerminalSession(hub, config.shell, config.activeWorkspace, scheduleStatus);
 
 function buildStatus(): Record<string, unknown> {
@@ -42,13 +47,15 @@ function buildStatus(): Record<string, unknown> {
     activeWorkspace: config.activeWorkspace,
     workspaceName: path.basename(config.activeWorkspace) || config.activeWorkspace,
     agent: {
-      available: agent.available,
-      state: agent.state,
-      title: agent.title,
-      queued: agent.queuedPrompts,
-      lastError: agent.lastError,
-      permission: agent.permission,
+      mode: ideChat.active ? "ide" : "cli",
+      available: ideChat.active || agent.available,
+      state: ideChat.active ? ideChat.state : agent.state,
+      title: ideChat.active ? ideChat.title : agent.title,
+      queued: ideChat.active ? 0 : agent.queuedPrompts,
+      lastError: ideChat.active ? ideChat.lastError : agent.lastError,
+      permission: ideChat.active ? ideChat.permission : agent.permission,
       commands: agent.commands,
+      conversationId: ideChat.conversationId,
     },
     terminal: {
       running: terminal.running,
@@ -58,6 +65,7 @@ function buildStatus(): Record<string, unknown> {
     ide: {
       installed: ide.installed,
       running: ide.isRunning,
+      conversations: ideChat.available,
     },
     uptimeSeconds: Math.floor(process.uptime()),
   };
@@ -96,12 +104,17 @@ async function switchWorkspace(target: string): Promise<string> {
 async function performAction(action: string, target: string): Promise<string> {
   switch (action.toLowerCase()) {
     case "approve":
-      return agent.approve();
+      return ideChat.active ? ideChat.approve() : agent.approve();
     case "reject":
-      return agent.reject();
+      return ideChat.active ? ideChat.reject() : agent.reject();
     case "stop":
-      return target === "terminal" ? terminal.stop() : agent.stop();
+      if (target === "terminal") return terminal.stop();
+      return ideChat.active ? ideChat.stop() : agent.stop();
     case "restart":
+      if (ideChat.active) {
+        ideChat.close();
+        hub.emit({ type: "clear", channel: "agent" });
+      }
       return agent.restart();
     case "retry":
       return agent.retryLast();
@@ -120,6 +133,7 @@ async function handlePrompt(prompt: string): Promise<string> {
     terminal.run(trimmed.slice(1));
     return "terminal";
   }
+  if (ideChat.active) return ideChat.prompt(trimmed);
   return agent.prompt(trimmed);
 }
 
@@ -131,10 +145,47 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true, service: "antigravity-remote-bridge", version: VERSION });
 });
 
+// Locks out an address after repeated wrong tokens, which matters once a public URL is used.
+const FAILURE_WINDOW_MS = 10 * 60 * 1000;
+const MAX_FAILURES = 10;
+const failures = new Map<string, { count: number; since: number }>();
+
+function clientAddress(req: http.IncomingMessage): string {
+  const direct = req.socket.remoteAddress || "unknown";
+  // Forwarding headers are only trusted from a tunnel running on this PC; anyone else could forge them.
+  const loopback = direct === "127.0.0.1" || direct === "::1" || direct === "::ffff:127.0.0.1";
+  if (!loopback) return direct;
+  const forwarded = String(req.headers["cf-connecting-ip"] ?? req.headers["x-forwarded-for"] ?? "").split(",")[0].trim();
+  return forwarded || direct;
+}
+
+function lockedOut(address: string): boolean {
+  const entry = failures.get(address);
+  if (!entry) return false;
+  if (Date.now() - entry.since > FAILURE_WINDOW_MS) {
+    failures.delete(address);
+    return false;
+  }
+  return entry.count >= MAX_FAILURES;
+}
+
+function recordFailure(address: string): void {
+  const entry = failures.get(address);
+  if (!entry || Date.now() - entry.since > FAILURE_WINDOW_MS) failures.set(address, { count: 1, since: Date.now() });
+  else entry.count += 1;
+  if (failures.get(address)!.count === MAX_FAILURES) console.warn(`[bridge] ${address} locked out for 10 minutes after repeated bad tokens`);
+}
+
 app.use("/api", (req: Request, res: Response, next: NextFunction) => {
+  const address = clientAddress(req);
+  if (lockedOut(address)) {
+    res.status(429).json({ error: "Too many failed attempts. Try again later." });
+    return;
+  }
   const header = req.headers.authorization ?? "";
   const provided = header.startsWith("Bearer ") ? header.slice(7).trim() : String(req.headers["x-auth-token"] ?? "");
   if (!provided || !tokenMatches(provided)) {
+    recordFailure(address);
     res.status(401).json({ error: "Invalid or missing token" });
     return;
   }
@@ -170,6 +221,41 @@ app.post("/api/ide/open", (req, res) => {
   } catch (err) {
     fail(res, 400, err);
   }
+});
+
+app.get("/api/ide/conversations", async (_req, res) => {
+  try {
+    res.json({ active: ideChat.conversationId, conversations: await ideChat.list() });
+  } catch (err) {
+    fail(res, 400, err);
+  }
+});
+
+app.post("/api/ide/conversations/open", async (req, res) => {
+  try {
+    const title = await ideChat.open(bodyString(req, "id"));
+    res.json({ ok: true, title });
+  } catch (err) {
+    fail(res, 400, err);
+  }
+});
+
+app.post("/api/ide/conversations/new", async (req, res) => {
+  try {
+    const prompt = bodyString(req, "prompt").trim();
+    if (!prompt) throw new Error("Prompt is empty");
+    const title = await ideChat.create(prompt);
+    res.json({ ok: true, title });
+  } catch (err) {
+    fail(res, 400, err);
+  }
+});
+
+app.post("/api/ide/conversations/close", (_req, res) => {
+  ideChat.close();
+  hub.emit({ type: "clear", channel: "agent" });
+  hub.log("agent", "system", "Back to the bridge agent session");
+  res.json({ ok: true });
 });
 
 app.post("/api/prompt", async (req, res) => {
@@ -236,7 +322,13 @@ const send = (ws: WebSocket, event: StreamEvent): void => {
 
 wss.on("connection", (ws, req) => {
   const url = new URL(req.url ?? "/", "http://localhost");
+  const address = clientAddress(req);
+  if (lockedOut(address)) {
+    ws.close(4029, "Too many failed attempts");
+    return;
+  }
   if (!tokenMatches(url.searchParams.get("token") ?? "")) {
+    recordFailure(address);
     ws.close(4001, "Unauthorized");
     return;
   }
@@ -247,7 +339,7 @@ wss.on("connection", (ws, req) => {
   send(ws, { type: "clear", channel: "terminal", timestamp: new Date().toISOString() });
   for (const event of hub.getHistory()) send(ws, event);
   send(ws, { type: "status", data: buildStatus(), timestamp: new Date().toISOString() });
-  const permission = agent.permission;
+  const permission = ideChat.active ? ideChat.permission : agent.permission;
   if (permission) {
     send(ws, { type: "permission", channel: "agent", data: permission as unknown as Record<string, unknown>, timestamp: new Date().toISOString() });
   }
@@ -314,26 +406,32 @@ async function start(): Promise<void> {
 }
 
 function printBanner(): void {
-  const publicUrl = cli.url?.trim().replace(/\/+$/, "");
-  const payload = JSON.stringify(
-    publicUrl
-      ? { url: publicUrl, ip: advertisedHost, port: config.port, token: config.token }
-      : { ip: advertisedHost, port: config.port, token: config.token }
-  );
+  // "ip" stays first for older app versions; "hosts" lists every route the app may try, best first.
+  const routes = [
+    advertisedHost,
+    ...addresses.filter((a) => isTailscaleAddress(a.address) && a.address !== advertisedHost).map((a) => a.address),
+  ];
+  const payload = JSON.stringify({
+    ip: advertisedHost,
+    port: config.port,
+    token: config.token,
+    hosts: routes,
+    ...(publicUrl ? { url: publicUrl } : {}),
+  });
+  const tailscale = routes.filter(isTailscaleAddress);
   const line = "=".repeat(64);
   console.log("");
   console.log(line);
   console.log(`  ANTIGRAVITY REMOTE BRIDGE v${VERSION}`);
   console.log(line);
   console.log(`  Host        ${config.displayName || os.hostname()}`);
-  if (publicUrl) {
-    console.log(`  Remote URL  ${publicUrl} (HTTPS - works from anywhere)`);
-  }
-  console.log(`  LAN Address ${advertisedHost}:${config.port}`);
+  console.log(`  Address     ${advertisedHost}:${config.port}`);
   const others = addresses.filter((a) => a.address !== advertisedHost);
   if (others.length > 0) {
     console.log(`  Also on     ${others.map((a) => `${a.address} (${a.name})`).join(", ")}`);
   }
+  console.log(`  Tailscale   ${tailscale.length > 0 ? tailscale.join(", ") : "not connected - install Tailscale to reach this PC from anywhere"}`);
+  if (publicUrl) console.log(`  Public URL  ${publicUrl} (HTTPS - works from anywhere)`);
   console.log(`  Token       ${config.token}`);
   console.log(`  Workspace   ${config.activeWorkspace}`);
   console.log(`  Agent CLI   ${agent.commandPath ?? "not found - prompts need the Antigravity CLI (agy)"}`);
@@ -343,11 +441,7 @@ function printBanner(): void {
   console.log("  Scan this code with the Antigravity Remote app:");
   console.log("");
   qrcode.generate(payload, { small: true }, (code) => console.log(code));
-  if (publicUrl) {
-    console.log(`  Manual entry: ${publicUrl}  token above`);
-  } else {
-    console.log(`  Manual entry: ${advertisedHost}  port ${config.port}  token above`);
-  }
+  console.log(`  Manual entry: ${advertisedHost}  port ${config.port}  token above`);
   console.log("  Press Ctrl+C to stop.");
   console.log(line);
 }
@@ -356,6 +450,7 @@ void start();
 
 const shutdown = (): void => {
   clearInterval(statusHeartbeat);
+  ideChat.close();
   agent.shutdown("bridge stopping");
   terminal.stop();
   server.close();

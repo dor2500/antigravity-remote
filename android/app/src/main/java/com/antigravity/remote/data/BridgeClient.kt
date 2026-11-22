@@ -34,6 +34,7 @@ class BridgeClient(
         fun onLog(entry: LogEntry)
         fun onClear(channel: Channel)
         fun onPermission(request: PermissionRequest?)
+        fun onRoute(baseUrl: String?)
     }
 
     private val http = OkHttpClient.Builder()
@@ -43,11 +44,18 @@ class BridgeClient(
         .pingInterval(15, TimeUnit.SECONDS)
         .build()
 
+    /** Short timeouts for probing which route to the PC currently works. */
+    private val probe = http.newBuilder()
+        .connectTimeout(3, TimeUnit.SECONDS)
+        .readTimeout(5, TimeUnit.SECONDS)
+        .build()
+
     private val json = "application/json; charset=utf-8".toMediaType()
     private val ids = AtomicLong(1L)
 
     @Volatile private var profile: ConnectionProfile? = null
     @Volatile private var socket: WebSocket? = null
+    @Volatile private var activeBase: String? = null
     @Volatile private var wanted = false
     @Volatile private var everConnected = false
     private var reconnectJob: Job? = null
@@ -64,17 +72,37 @@ class BridgeClient(
         socket?.cancel()
         listener.onConnectionState(ConnectionStatus.CONNECTING, null)
         scope.launch(Dispatchers.IO) {
-            fetchStatus(target)
-                .onSuccess { status ->
-                    listener.onStatus(status)
-                    openSocket(target)
-                }
-                .onFailure { err ->
-                    wanted = false
-                    profile = null
-                    listener.onConnectionState(ConnectionStatus.DISCONNECTED, describe(err))
-                }
+            val found = findRoute(target)
+            if (profile != target) return@launch
+            if (found.isSuccess) {
+                openSocket(target)
+            } else {
+                wanted = false
+                profile = null
+                listener.onConnectionState(ConnectionStatus.DISCONNECTED, describe(found.exceptionOrNull()!!))
+            }
         }
+    }
+
+    /**
+     * Tries every route to the PC (the last working one first) and keeps the first that answers
+     * with a valid status. A wrong token stops the search, since no route will accept it.
+     */
+    private fun findRoute(target: ConnectionProfile): Result<String> {
+        val ordered = target.routes.let { routes -> listOfNotNull(activeBase?.takeIf { it in routes }) + routes }.distinct()
+        var lastError: Throwable = IOException("No route to the PC")
+        for (base in ordered) {
+            val result = runCatching { execute(probe, request(target, base, "/api/status").get().build()) { parseStatus(it) } }
+            result.onSuccess { status ->
+                activeBase = base
+                listener.onRoute(base)
+                listener.onStatus(status)
+                return Result.success(base)
+            }
+            lastError = result.exceptionOrNull() ?: lastError
+            if (lastError.message?.contains("token", ignoreCase = true) == true) break
+        }
+        return Result.failure(lastError)
     }
 
     /** Skip the backoff wait, e.g. when the network comes back or the app returns to the foreground. */
@@ -83,7 +111,9 @@ class BridgeClient(
         if (!wanted || !everConnected || socket != null) return
         reconnectJob?.cancel()
         attempt = 0
-        openSocket(target)
+        reconnectJob = scope.launch(Dispatchers.IO) {
+            if (findRoute(target).isSuccess && wanted && profile == target && socket == null) openSocket(target)
+        }
     }
 
     fun disconnect() {
@@ -92,11 +122,14 @@ class BridgeClient(
         socket?.close(1000, "Disconnected by user")
         socket = null
         profile = null
+        activeBase = null
+        listener.onRoute(null)
         listener.onConnectionState(ConnectionStatus.DISCONNECTED, null)
     }
 
     private fun openSocket(target: ConnectionProfile) {
-        val request = Request.Builder().url(target.wsUrl).build()
+        val base = activeBase ?: target.routes.first()
+        val request = Request.Builder().url(target.wsUrl(base)).build()
         socket = http.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 if (profile != target) return
@@ -111,10 +144,11 @@ class BridgeClient(
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                 webSocket.close(1000, null)
-                if (code == 4001) {
+                if (code == 4001 || code == 4029) {
                     wanted = false
                     profile = null
-                    listener.onConnectionState(ConnectionStatus.DISCONNECTED, "The bridge rejected the token. Scan the QR code again.")
+                    val message = if (code == 4001) "The bridge rejected the token. Scan the QR code again." else "Too many failed attempts. Wait 10 minutes and try again."
+                    listener.onConnectionState(ConnectionStatus.DISCONNECTED, message)
                 }
             }
 
@@ -137,7 +171,13 @@ class BridgeClient(
         reconnectJob?.cancel()
         reconnectJob = scope.launch(Dispatchers.IO) {
             delay(wait)
-            if (wanted && profile == target && socket == null) openSocket(target)
+            if (!wanted || profile != target || socket != null) return@launch
+            // The network may have changed (Wi-Fi to mobile data): look for a route that works now.
+            if (findRoute(target).isSuccess) {
+                if (wanted && profile == target && socket == null) openSocket(target)
+            } else {
+                lost(webSocket, target, "No route to the PC right now")
+            }
         }
     }
 
@@ -167,6 +207,26 @@ class BridgeClient(
 
     suspend fun fetchStatus(target: ConnectionProfile? = profile): Result<BridgeStatus> = call(target) { p ->
         get(p, "/api/status") { parseStatus(it) }
+    }
+
+    suspend fun fetchIdeConversations(): Result<List<IdeConversation>> = call { p ->
+        get(p, "/api/ide/conversations") { body ->
+            body.optJSONArray("conversations").objects().map {
+                IdeConversation(it.getString("id"), it.optString("title"), it.optString("status"), it.optString("updatedAt"))
+            }
+        }
+    }
+
+    suspend fun openIdeConversation(id: String): Result<String> = call { p ->
+        post(p, "/api/ide/conversations/open", JSONObject().put("id", id)) { it.optString("title") }
+    }
+
+    suspend fun newIdeConversation(prompt: String): Result<String> = call { p ->
+        post(p, "/api/ide/conversations/new", JSONObject().put("prompt", prompt)) { it.optString("title") }
+    }
+
+    suspend fun closeIdeConversation(): Result<Unit> = call { p ->
+        post(p, "/api/ide/conversations/close", JSONObject()) { }
     }
 
     suspend fun sendPrompt(prompt: String): Result<String> = call { p ->
@@ -221,21 +281,25 @@ class BridgeClient(
     }
 
     private fun <T> get(p: ConnectionProfile, path: String, parse: (JSONObject) -> T): T =
-        execute(request(p, path).get().build(), parse)
+        execute(http, request(p, activeBase ?: p.routes.first(), path).get().build(), parse)
 
     private fun <T> post(p: ConnectionProfile, path: String, body: JSONObject, parse: (JSONObject) -> T): T =
-        execute(request(p, path).post(body.toString().toRequestBody(json)).build(), parse)
+        execute(http, request(p, activeBase ?: p.routes.first(), path).post(body.toString().toRequestBody(json)).build(), parse)
 
-    private fun request(p: ConnectionProfile, path: String): Request.Builder =
-        Request.Builder().url(p.baseUrl + path).header("Authorization", "Bearer ${p.token}")
+    private fun request(p: ConnectionProfile, base: String, path: String): Request.Builder =
+        Request.Builder().url(base + path).header("Authorization", "Bearer ${p.token}")
 
-    private fun <T> execute(request: Request, parse: (JSONObject) -> T): T {
-        http.newCall(request).execute().use { response ->
+    private fun <T> execute(client: OkHttpClient, request: Request, parse: (JSONObject) -> T): T {
+        client.newCall(request).execute().use { response ->
             val text = response.body?.string().orEmpty()
             val body = runCatching { JSONObject(text) }.getOrElse { JSONObject() }
             if (!response.isSuccessful) {
                 val message = body.optString("error").ifEmpty {
-                    if (response.code == 401) "Token rejected by the bridge" else "HTTP ${response.code}"
+                    when (response.code) {
+                        401 -> "Token rejected by the bridge"
+                        429 -> "Too many failed attempts. Wait 10 minutes and try again."
+                        else -> "HTTP ${response.code}"
+                    }
                 }
                 throw IOException(message)
             }
@@ -254,6 +318,8 @@ class BridgeClient(
             activeWorkspace = data.optString("activeWorkspace"),
             workspaceName = data.optString("workspaceName"),
             agent = AgentInfo(
+                mode = agent.optString("mode", "cli"),
+                conversationId = agent.optNullableString("conversationId"),
                 available = agent.optBoolean("available"),
                 state = AgentState.from(agent.optString("state")),
                 title = agent.optNullableString("title"),
@@ -264,7 +330,8 @@ class BridgeClient(
             terminalCommand = terminal.optNullableString("command"),
             terminalCwd = terminal.optString("cwd"),
             ideInstalled = ide.optBoolean("installed"),
-            ideRunning = ide.optBoolean("running")
+            ideRunning = ide.optBoolean("running"),
+            ideConversations = ide.optBoolean("conversations")
         )
     }
 

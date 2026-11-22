@@ -18,47 +18,42 @@ enum class Channel(val wire: String) {
     }
 }
 
+/**
+ * A paired PC. [host] is the main address (an IP, a host name, or a full http(s) URL);
+ * [extraRoutes] are other ways to reach the same bridge, such as its Tailscale IP or a public
+ * tunnel URL. The app tries the routes in order and uses the first one that answers.
+ */
 data class ConnectionProfile(
     val host: String,
     val port: Int,
-    val token: String
+    val token: String,
+    val extraRoutes: List<String> = emptyList()
 ) {
-    val isHttps: Boolean
-        get() = host.trim().startsWith("https://", ignoreCase = true) ||
-            (!host.trim().startsWith("http://", ignoreCase = true) && port == 443)
+    val routes: List<String> get() = (listOf(host) + extraRoutes).map { baseUrlFor(it, port) }.distinct()
+    val label: String get() = if (host.startsWith("http")) host.removePrefix("https://").removePrefix("http://") else "$host:$port"
 
-    private val normalizedBase: String
-        get() {
-            val trimmed = host.trim().trimEnd('/')
-            if (trimmed.startsWith("https://", ignoreCase = true) || trimmed.startsWith("http://", ignoreCase = true)) {
-                return trimmed
-            }
-            val hostPart = if (trimmed.contains(':') && !trimmed.startsWith("[")) "[$trimmed]" else trimmed
-            return if (port == 443) "https://$hostPart" else "http://$hostPart:$port"
+    fun wsUrl(baseUrl: String): String =
+        baseUrl.replaceFirst(Regex("^http"), "ws") + "/ws?token=" + URLEncoder.encode(token, "UTF-8")
+
+    companion object {
+        fun baseUrlFor(route: String, port: Int): String {
+            val value = route.trim().trimEnd('/')
+            if (value.startsWith("http://") || value.startsWith("https://")) return value
+            val host = if (value.count { it == ':' } > 1 && !value.startsWith("[")) "[$value]" else value
+            return "http://$host:$port"
         }
 
-    val baseUrl: String get() = normalizedBase
-
-    val wsUrl: String
-        get() {
-            val wsBase = when {
-                normalizedBase.startsWith("https://", ignoreCase = true) -> "wss://" + normalizedBase.substring(8)
-                normalizedBase.startsWith("http://", ignoreCase = true) -> "ws://" + normalizedBase.substring(7)
-                else -> "ws://$normalizedBase"
-            }
-            return "$wsBase/ws?token=${URLEncoder.encode(token, "UTF-8")}"
-        }
-
-    val label: String
-        get() {
-            val trimmed = host.trim().trimEnd('/')
+        /** Short label for where a route goes: LAN, Tailscale or Internet. */
+        fun routeKind(baseUrl: String): String {
+            val host = baseUrl.substringAfter("://").substringBefore('/').substringBeforeLast(':').trim('[', ']')
             return when {
-                trimmed.startsWith("https://", ignoreCase = true) -> trimmed.substring(8)
-                trimmed.startsWith("http://", ignoreCase = true) -> trimmed.substring(7)
-                port == 443 -> trimmed
-                else -> "$trimmed:$port"
+                baseUrl.startsWith("https://") -> "Internet"
+                Regex("^100\\.(6[4-9]|[7-9]\\d|1[01]\\d|12[0-7])\\.").containsMatchIn(host) -> "Tailscale"
+                host.endsWith(".ts.net") -> "Tailscale"
+                else -> "LAN"
             }
         }
+    }
 }
 
 data class LogEntry(
@@ -90,6 +85,8 @@ enum class AgentState(val wire: String, val label: String) {
 }
 
 data class AgentInfo(
+    val mode: String = "cli",
+    val conversationId: String? = null,
     val available: Boolean = false,
     val state: AgentState = AgentState.OFFLINE,
     val title: String? = null,
@@ -107,7 +104,15 @@ data class BridgeStatus(
     val terminalCommand: String? = null,
     val terminalCwd: String = "",
     val ideInstalled: Boolean = false,
-    val ideRunning: Boolean = false
+    val ideRunning: Boolean = false,
+    val ideConversations: Boolean = false
+)
+
+data class IdeConversation(
+    val id: String,
+    val title: String,
+    val status: String,
+    val updatedAt: String
 )
 
 data class WorkspaceItem(

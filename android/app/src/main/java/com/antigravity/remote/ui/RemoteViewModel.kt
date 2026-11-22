@@ -13,6 +13,7 @@ import com.antigravity.remote.data.ConnectionProfile
 import com.antigravity.remote.data.ConnectionStatus
 import com.antigravity.remote.data.FileContent
 import com.antigravity.remote.data.FileEntry
+import com.antigravity.remote.data.IdeConversation
 import com.antigravity.remote.data.LogEntry
 import com.antigravity.remote.data.PermissionRequest
 import com.antigravity.remote.data.WorkspaceItem
@@ -37,7 +38,10 @@ data class RemoteUiState(
     val fileEntries: List<FileEntry> = emptyList(),
     val filesLoading: Boolean = false,
     val openedFile: FileContent? = null,
-    val toastMessage: String? = null
+    val toastMessage: String? = null,
+    val activeRoute: String? = null,
+    val ideConversations: List<IdeConversation> = emptyList(),
+    val ideConversationsLoading: Boolean = false
 ) {
     val isOnline: Boolean
         get() = connectionStatus == ConnectionStatus.CONNECTED || connectionStatus == ConnectionStatus.RECONNECTING
@@ -87,6 +91,10 @@ class RemoteViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
+        override fun onRoute(baseUrl: String?) {
+            _uiState.update { it.copy(activeRoute = baseUrl) }
+        }
+
         override fun onPermission(request: PermissionRequest?) {
             if (_uiState.value.permission != request) _uiState.update { it.copy(permission = request) }
         }
@@ -110,18 +118,24 @@ class RemoteViewModel(application: Application) : AndroidViewModel(application) 
         client.connect(profile)
     }
 
-    /** Accepts the bridge QR payload: {"url": "https://...", "ip": "...", "port": 8765, "token": "..."}. */
+    /**
+     * Accepts the bridge QR payload: {"ip", "port", "token"} plus optional "hosts" (every
+     * address of the PC, such as its Tailscale IP) and "url" (a public https address).
+     */
     fun connectFromQrPayload(raw: String): Boolean {
         val profile = runCatching {
             val json = JSONObject(raw.trim())
-            val url = json.optString("url", "").trim()
-            val ip = json.optString("ip", "").trim()
-            val host = url.ifEmpty { ip }
-            val port = if (url.startsWith("https://", ignoreCase = true)) 443 else json.optInt("port", 8765)
+            val ip = json.getString("ip").trim()
+            val hosts = json.optJSONArray("hosts")
+            val extra = buildList {
+                if (hosts != null) for (i in 0 until hosts.length()) add(hosts.optString(i).trim())
+                json.optString("url").trim().takeIf { it.startsWith("http") }?.let { add(it) }
+            }.filter { it.isNotEmpty() && it != ip }.distinct()
             ConnectionProfile(
-                host = host,
-                port = port,
-                token = json.getString("token").trim()
+                host = ip,
+                port = json.optInt("port", 8765),
+                token = json.getString("token").trim(),
+                extraRoutes = extra
             )
         }.getOrNull()
         if (profile == null || profile.host.isEmpty() || profile.token.isEmpty()) {
@@ -177,6 +191,37 @@ class RemoteViewModel(application: Application) : AndroidViewModel(application) 
             client.openInIde(path)
                 .onSuccess { toast("Opened in Antigravity IDE") }
                 .onFailure { toast(it.message ?: "Could not open the IDE") }
+        }
+    }
+
+    fun loadIdeConversations() {
+        _uiState.update { it.copy(ideConversationsLoading = true) }
+        viewModelScope.launch {
+            client.fetchIdeConversations()
+                .onSuccess { list -> _uiState.update { it.copy(ideConversations = list, ideConversationsLoading = false) } }
+                .onFailure { err ->
+                    _uiState.update { it.copy(ideConversationsLoading = false) }
+                    toast(err.message ?: "Could not read IDE conversations")
+                }
+        }
+    }
+
+    fun openIdeConversation(id: String) {
+        viewModelScope.launch {
+            client.openIdeConversation(id).onFailure { toast(it.message ?: "Could not open the conversation") }
+        }
+    }
+
+    fun newIdeConversation(prompt: String) {
+        if (prompt.isBlank()) return
+        viewModelScope.launch {
+            client.newIdeConversation(prompt.trim()).onFailure { toast(it.message ?: "Could not start the conversation") }
+        }
+    }
+
+    fun closeIdeConversation() {
+        viewModelScope.launch {
+            client.closeIdeConversation().onFailure { toast(it.message ?: "Could not leave the conversation") }
         }
     }
 

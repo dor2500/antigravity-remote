@@ -4,6 +4,7 @@ param(
     [int]$Port = 8765,
     [string]$Workspace = "",
     [string]$Name = "",
+    [string]$PublicUrl = "",
     [switch]$Tunnel,
     [switch]$ResetToken,
     [switch]$SkipFirewall
@@ -141,6 +142,7 @@ $nodeArgs = @("dist\index.js", "--port", "$Port")
 if ($Workspace) { $nodeArgs += @("--workspace", $Workspace) }
 if ($Name) { $nodeArgs += @("--name", $Name) }
 if ($tunnelUrl) { $nodeArgs += @("--url", $tunnelUrl) }
+elseif ($PublicUrl) { $nodeArgs += @("--url", $PublicUrl) }
 if ($ResetToken) { $nodeArgs += "--reset-token" }
 Write-Step "Starting bridge on port $Port..."
 try {
