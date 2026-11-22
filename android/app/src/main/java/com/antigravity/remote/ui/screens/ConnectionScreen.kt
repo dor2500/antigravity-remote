@@ -4,6 +4,14 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.unit.Dp
+import com.antigravity.remote.R
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -22,7 +30,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.QrCodeScanner
-import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -107,12 +114,7 @@ fun ConnectionScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Default.Terminal,
-                    contentDescription = null,
-                    tint = AccentBlue,
-                    modifier = Modifier.size(32.dp)
-                )
+                AppLogo(size = 48.dp)
                 Column {
                     Text(
                         text = "Antigravity Remote",
@@ -120,7 +122,7 @@ fun ConnectionScreen(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "Connect to your Windows IDE bridge",
+                        text = "Control Antigravity on your PC from this phone",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -285,6 +287,38 @@ fun ConnectionScreen(
                     Text("Connect")
                 }
             }
+
+            PairingHint()
+        }
+    }
+}
+
+@Composable
+fun AppLogo(size: Dp) {
+    Box(modifier = Modifier.size(size).clip(RoundedCornerShape(size / 3.6f))) {
+        Image(painterResource(R.drawable.ic_launcher_background), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        Image(painterResource(R.drawable.ic_launcher_foreground), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+    }
+}
+
+@Composable
+private fun PairingHint() {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(BgSecondary)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Text("How to pair", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+        listOf(
+            "1. On the PC, double-click start-bridge.bat",
+            "2. Tap Scan Bridge QR Code and point at the code it prints",
+            "3. Away from home? Use the PC's Tailscale or VPN address as the host"
+        ).forEach {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

@@ -1,4 +1,4 @@
-import cors from "cors";
+import crypto from "crypto";
 import express, { NextFunction, Request, Response } from "express";
 import fs from "fs";
 import http from "http";
@@ -6,252 +6,348 @@ import os from "os";
 import path from "path";
 import qrcode from "qrcode-terminal";
 import { WebSocket, WebSocketServer } from "ws";
-import { getLocalLanIp, loadOrCreateConfig, saveConfig } from "./config";
+import { AgentSession, resolveAgentCommand } from "./agent";
+import { CONFIG_PATH, listAddresses, loadOrCreateConfig, parseCli, saveConfig } from "./config";
+import { EventHub, StreamEvent } from "./events";
 import { listDirectory, readFileContent } from "./files";
-import { SessionManager, StreamEvent } from "./session";
+import { IdeIntegration } from "./ide";
+import { TerminalSession } from "./terminal";
 
-function parseCliPort(): number | undefined {
-  const idx = process.argv.indexOf("--port");
-  if (idx !== -1 && process.argv[idx + 1]) {
-    const parsed = Number(process.argv[idx + 1]);
-    if (!Number.isNaN(parsed) && parsed > 0) return parsed;
-  }
-  return undefined;
+const VERSION = "1.0.0";
+
+const cli = parseCli(process.argv.slice(2));
+const config = loadOrCreateConfig(cli);
+let addresses: Awaited<ReturnType<typeof listAddresses>> = [];
+let advertisedHost = config.advertiseHost || "127.0.0.1";
+
+const hub = new EventHub();
+const ide = new IdeIntegration(config.ideCli);
+let statusTimer: NodeJS.Timeout | null = null;
+const scheduleStatus = (): void => {
+  if (statusTimer) return;
+  statusTimer = setTimeout(() => {
+    statusTimer = null;
+    hub.emit({ type: "status", data: buildStatus() });
+  }, 50);
+};
+const agent = new AgentSession(hub, () => config.activeWorkspace, resolveAgentCommand(config.agentCommand), scheduleStatus);
+const terminal = new TerminalSession(hub, config.shell, config.activeWorkspace, scheduleStatus);
+
+function buildStatus(): Record<string, unknown> {
+  return {
+    version: VERSION,
+    hostname: config.displayName || os.hostname(),
+    ip: advertisedHost,
+    port: config.port,
+    activeWorkspace: config.activeWorkspace,
+    workspaceName: path.basename(config.activeWorkspace) || config.activeWorkspace,
+    agent: {
+      available: agent.available,
+      state: agent.state,
+      title: agent.title,
+      queued: agent.queuedPrompts,
+      lastError: agent.lastError,
+      permission: agent.permission,
+      commands: agent.commands,
+    },
+    terminal: {
+      running: terminal.running,
+      command: terminal.command,
+      cwd: terminal.workingDirectory,
+    },
+    ide: {
+      installed: ide.installed,
+      running: ide.isRunning,
+    },
+    uptimeSeconds: Math.floor(process.uptime()),
+  };
 }
 
-const config = loadOrCreateConfig(parseCliPort());
-const lanIp = getLocalLanIp();
-const session = new SessionManager(() => config.activeWorkspace);
+function tokenMatches(provided: string): boolean {
+  const a = Buffer.from(provided);
+  const b = Buffer.from(config.token);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+function bodyString(req: Request, key: string): string {
+  const value = (req.body as Record<string, unknown> | undefined)?.[key];
+  return typeof value === "string" ? value : "";
+}
+
+function fail(res: Response, status: number, err: unknown): void {
+  res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
+}
+
+async function switchWorkspace(target: string): Promise<string> {
+  const resolved = path.resolve(target.trim());
+  if (!target.trim() || !fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
+    throw new Error(`Not a folder: ${target}`);
+  }
+  config.activeWorkspace = resolved;
+  config.workspaces = [resolved, ...config.workspaces.filter((w) => w.toLowerCase() !== resolved.toLowerCase())];
+  saveConfig(config);
+  await agent.moveTo(resolved);
+  if (!terminal.running) terminal.resetTo(resolved);
+  hub.log("agent", "system", `Workspace: ${path.basename(resolved)} (${resolved})`);
+  scheduleStatus();
+  return resolved;
+}
+
+async function performAction(action: string, target: string): Promise<string> {
+  switch (action.toLowerCase()) {
+    case "approve":
+      return agent.approve();
+    case "reject":
+      return agent.reject();
+    case "stop":
+      return target === "terminal" ? terminal.stop() : agent.stop();
+    case "restart":
+      return agent.restart();
+    case "retry":
+      return agent.retryLast();
+    case "clear":
+      hub.emit({ type: "clear", channel: target === "terminal" ? "terminal" : "agent" });
+      return "Cleared";
+    default:
+      throw new Error(`Unknown action: ${action}`);
+  }
+}
+
+async function handlePrompt(prompt: string): Promise<string> {
+  const trimmed = prompt.trim();
+  if (!trimmed) throw new Error("Prompt is empty");
+  if (trimmed.startsWith("!")) {
+    terminal.run(trimmed.slice(1));
+    return "terminal";
+  }
+  return agent.prompt(trimmed);
+}
 
 const app = express();
-app.use(cors());
-app.use(express.json({ limit: "2mb" }));
+app.disable("x-powered-by");
+app.use(express.json({ limit: "1mb" }));
 
-// Public health check (no sensitive data)
-app.get("/health", (_req: Request, res: Response) => {
-  res.json({ ok: true, service: "antigravity-remote-bridge" });
+app.get("/health", (_req, res) => {
+  res.json({ ok: true, service: "antigravity-remote-bridge", version: VERSION });
 });
 
-// Bearer token authentication for all /api routes
 app.use("/api", (req: Request, res: Response, next: NextFunction) => {
-  const authHeader = req.headers.authorization || "";
-  const tokenHeader = (req.headers["x-auth-token"] as string) || "";
-  const bearer = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
-  const provided = bearer || tokenHeader;
-
-  if (!provided || provided !== config.token) {
-    res.status(401).json({ error: "Unauthorized: invalid or missing token" });
+  const header = req.headers.authorization ?? "";
+  const provided = header.startsWith("Bearer ") ? header.slice(7).trim() : String(req.headers["x-auth-token"] ?? "");
+  if (!provided || !tokenMatches(provided)) {
+    res.status(401).json({ error: "Invalid or missing token" });
     return;
   }
   next();
 });
 
-app.get("/api/status", (_req: Request, res: Response) => {
-  res.json({
-    connected: true,
-    hostname: os.hostname(),
-    ip: lanIp,
-    port: config.port,
-    activeWorkspace: config.activeWorkspace,
-    workspaceName: path.basename(config.activeWorkspace),
-    running: session.isRunning(),
-    activeCommand: session.getActiveCommand(),
-    antigravityRunning: session.isAntigravityRunning(),
-    agyCliAvailable: session.getAgyCliPath() !== null,
-    uptimeSeconds: Math.floor(process.uptime()),
-  });
+app.get("/api/status", (_req, res) => {
+  res.json(buildStatus());
 });
 
-app.get("/api/workspaces", (_req: Request, res: Response) => {
-  const list = config.workspaces
+app.get("/api/workspaces", (_req, res) => {
+  const workspaces = config.workspaces
     .filter((w) => fs.existsSync(w))
-    .map((w) => ({
-      path: w,
-      name: path.basename(w),
-      active: w === config.activeWorkspace,
-    }));
-  res.json({ activeWorkspace: config.activeWorkspace, workspaces: list });
+    .map((w) => ({ path: w, name: path.basename(w) || w, active: w === config.activeWorkspace }));
+  res.json({ activeWorkspace: config.activeWorkspace, workspaces });
 });
 
-app.post("/api/workspaces/switch", (req: Request, res: Response) => {
-  const target = String(req.body?.path || "").trim();
-  if (!target || !fs.existsSync(target) || !fs.statSync(target).isDirectory()) {
-    res.status(400).json({ error: "Invalid workspace directory path" });
-    return;
-  }
-  const resolved = path.resolve(target);
-  config.activeWorkspace = resolved;
-  if (!config.workspaces.includes(resolved)) {
-    config.workspaces.unshift(resolved);
-  }
-  saveConfig(config);
-
-  session.emit({
-    type: "workspace_changed",
-    level: "system",
-    message: `Switched workspace to ${path.basename(resolved)} (${resolved})`,
-    data: {
-      activeWorkspace: resolved,
-      workspaceName: path.basename(resolved),
-    },
-  });
-
-  res.json({
-    ok: true,
-    activeWorkspace: resolved,
-    workspaceName: path.basename(resolved),
-  });
-});
-
-app.post("/api/prompt", (req: Request, res: Response) => {
-  const prompt = String(req.body?.prompt || "");
-  if (!prompt.trim()) {
-    res.status(400).json({ error: "Prompt cannot be empty" });
-    return;
-  }
-  const result = session.sendPrompt(prompt);
-  res.json({ ok: true, mode: result.mode });
-});
-
-app.post("/api/terminal", (req: Request, res: Response) => {
-  const command = String(req.body?.command || "");
-  if (!command.trim()) {
-    res.status(400).json({ error: "Command cannot be empty" });
-    return;
-  }
-  const started = session.runShellCommand(command, "terminal");
-  if (!started) {
-    res.status(409).json({ error: "Another command is currently running" });
-    return;
-  }
-  res.json({ ok: true, command });
-});
-
-app.post("/api/action", (req: Request, res: Response) => {
-  const action = String(req.body?.action || "");
-  if (!action) {
-    res.status(400).json({ error: "Action is required" });
-    return;
-  }
-  const result = session.performAction(action);
-  if (!result.ok) {
-    res.status(400).json({ error: result.detail });
-    return;
-  }
-  res.json(result);
-});
-
-app.get("/api/files", (req: Request, res: Response) => {
+app.post("/api/workspaces/switch", async (req, res) => {
   try {
-    const relPath = String(req.query.path || "");
-    const entries = listDirectory(config.activeWorkspace, relPath);
-    res.json({ path: relPath, entries });
+    const resolved = await switchWorkspace(bodyString(req, "path"));
+    res.json({ ok: true, activeWorkspace: resolved, workspaceName: path.basename(resolved) });
   } catch (err) {
-    res.status(400).json({ error: (err as Error).message });
+    fail(res, 400, err);
   }
 });
 
-app.get("/api/files/read", (req: Request, res: Response) => {
+app.post("/api/ide/open", (req, res) => {
   try {
-    const relPath = String(req.query.path || "");
-    if (!relPath) {
-      res.status(400).json({ error: "Query parameter 'path' is required" });
-      return;
-    }
-    const fileData = readFileContent(config.activeWorkspace, relPath);
-    res.json(fileData);
+    const folder = bodyString(req, "path") || config.activeWorkspace;
+    ide.openFolder(folder);
+    hub.log("agent", "system", `Opened ${path.basename(folder)} in Antigravity IDE`);
+    res.json({ ok: true });
   } catch (err) {
-    res.status(400).json({ error: (err as Error).message });
+    fail(res, 400, err);
+  }
+});
+
+app.post("/api/prompt", async (req, res) => {
+  try {
+    const mode = await handlePrompt(bodyString(req, "prompt"));
+    res.json({ ok: true, mode });
+  } catch (err) {
+    fail(res, 400, err);
+  }
+});
+
+app.post("/api/terminal", (req, res) => {
+  try {
+    terminal.run(bodyString(req, "command"));
+    res.json({ ok: true });
+  } catch (err) {
+    fail(res, 409, err);
+  }
+});
+
+app.post("/api/terminal/input", (req, res) => {
+  try {
+    terminal.sendInput(bodyString(req, "text"));
+    res.json({ ok: true });
+  } catch (err) {
+    fail(res, 409, err);
+  }
+});
+
+app.post("/api/action", async (req, res) => {
+  try {
+    const detail = await performAction(bodyString(req, "action"), bodyString(req, "target"));
+    res.json({ ok: true, detail });
+  } catch (err) {
+    fail(res, 400, err);
+  }
+});
+
+app.get("/api/files", (req, res) => {
+  try {
+    const relPath = typeof req.query.path === "string" ? req.query.path : "";
+    res.json({ path: relPath, entries: listDirectory(config.activeWorkspace, relPath) });
+  } catch (err) {
+    fail(res, 400, err);
+  }
+});
+
+app.get("/api/files/read", (req, res) => {
+  try {
+    const relPath = typeof req.query.path === "string" ? req.query.path : "";
+    if (!relPath) throw new Error("Query parameter 'path' is required");
+    res.json(readFileContent(config.activeWorkspace, relPath));
+  } catch (err) {
+    fail(res, 400, err);
   }
 });
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
 
-wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
-  const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
-  const token = url.searchParams.get("token") || "";
+const send = (ws: WebSocket, event: StreamEvent): void => {
+  if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(event));
+};
 
-  if (token !== config.token) {
+wss.on("connection", (ws, req) => {
+  const url = new URL(req.url ?? "/", "http://localhost");
+  if (!tokenMatches(url.searchParams.get("token") ?? "")) {
     ws.close(4001, "Unauthorized");
     return;
   }
+  const remote = req.socket.remoteAddress ?? "unknown";
+  console.log(`[bridge] phone connected from ${remote}`);
 
-  // Send recent log history on connect
-  for (const event of session.getLogBuffer()) {
-    ws.send(JSON.stringify(event));
+  send(ws, { type: "clear", channel: "agent", timestamp: new Date().toISOString() });
+  send(ws, { type: "clear", channel: "terminal", timestamp: new Date().toISOString() });
+  for (const event of hub.getHistory()) send(ws, event);
+  send(ws, { type: "status", data: buildStatus(), timestamp: new Date().toISOString() });
+  const permission = agent.permission;
+  if (permission) {
+    send(ws, { type: "permission", channel: "agent", data: permission as unknown as Record<string, unknown>, timestamp: new Date().toISOString() });
   }
 
-  // Send initial status
-  ws.send(
-    JSON.stringify({
-      type: "status",
-      timestamp: new Date().toISOString(),
-      data: {
-        running: session.isRunning(),
-        activeCommand: session.getActiveCommand(),
-        antigravityRunning: session.isAntigravityRunning(),
-        agyCliAvailable: session.getAgyCliPath() !== null,
-        activeWorkspace: config.activeWorkspace,
-        workspaceName: path.basename(config.activeWorkspace),
-        hostname: os.hostname(),
-      },
-    } satisfies StreamEvent)
-  );
+  const unsubscribe = hub.subscribe((event) => send(ws, event));
 
-  const unsubscribe = session.subscribe((event) => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(event));
-    }
-  });
-
-  ws.on("message", (raw) => {
+  ws.on("message", async (raw) => {
+    let msg: Record<string, unknown>;
     try {
-      const msg = JSON.parse(raw.toString("utf-8")) as {
-        type?: string;
-        command?: string;
-        prompt?: string;
-        action?: string;
-      };
-      if (msg.type === "terminal" && msg.command) {
-        session.runShellCommand(msg.command, "terminal");
-      } else if (msg.type === "prompt" && msg.prompt) {
-        session.sendPrompt(msg.prompt);
-      } else if (msg.type === "action" && msg.action) {
-        session.performAction(msg.action);
-      }
+      msg = JSON.parse(raw.toString("utf-8"));
     } catch {
-      // Ignore malformed WS messages
+      return;
+    }
+    const text = (key: string): string => (typeof msg[key] === "string" ? (msg[key] as string) : "");
+    try {
+      switch (msg.type) {
+        case "prompt":
+          await handlePrompt(text("prompt"));
+          break;
+        case "terminal":
+          terminal.run(text("command"));
+          break;
+        case "terminal_input":
+          terminal.sendInput(text("text"));
+          break;
+        case "action":
+          await performAction(text("action"), text("target"));
+          break;
+        case "ping":
+          send(ws, { type: "status", data: buildStatus(), timestamp: new Date().toISOString() });
+          break;
+        default:
+          break;
+      }
+    } catch (err) {
+      const channel = msg.type === "terminal" || msg.type === "terminal_input" ? "terminal" : "agent";
+      hub.log(channel, "error", (err as Error).message);
     }
   });
 
   ws.on("close", () => {
     unsubscribe();
+    console.log(`[bridge] phone disconnected (${remote})`);
   });
 });
 
-server.listen(config.port, "0.0.0.0", () => {
-  const qrPayload = JSON.stringify({
-    ip: lanIp,
-    port: config.port,
-    token: config.token,
-  });
+const statusHeartbeat = setInterval(() => {
+  if (wss.clients.size > 0) scheduleStatus();
+}, 10000);
 
-  console.log("");
-  console.log("============================================================");
-  console.log("  ANTIGRAVITY IDE - REMOTE BRIDGE SERVER");
-  console.log("============================================================");
-  console.log(`  Host:      ${os.hostname()}`);
-  console.log(`  LAN IP:    ${lanIp}`);
-  console.log(`  Port:      ${config.port}`);
-  console.log(`  Token:     ${config.token}`);
-  console.log(`  Workspace: ${config.activeWorkspace}`);
-  console.log(`  IDE Proc:  ${session.isAntigravityRunning() ? "Detected" : "Standby"}`);
-  console.log("============================================================");
-  console.log("  Scan this QR code in the Antigravity Remote Android app:");
-  console.log("");
-  qrcode.generate(qrPayload, { small: true });
-  console.log("");
-  console.log("  Press Ctrl+C to stop the bridge server.");
-  console.log("============================================================");
+server.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(`[bridge] Port ${config.port} is already in use. Close the other bridge or run with --port <n>.`);
+  } else {
+    console.error(`[bridge] Server error: ${err.message}`);
+  }
+  process.exit(1);
 });
+
+async function start(): Promise<void> {
+  addresses = await listAddresses();
+  advertisedHost = config.advertiseHost || addresses[0]?.address || "127.0.0.1";
+  server.listen(config.port, "0.0.0.0", printBanner);
+}
+
+function printBanner(): void {
+  const payload = JSON.stringify({ ip: advertisedHost, port: config.port, token: config.token });
+  const line = "=".repeat(64);
+  console.log("");
+  console.log(line);
+  console.log(`  ANTIGRAVITY REMOTE BRIDGE v${VERSION}`);
+  console.log(line);
+  console.log(`  Host        ${config.displayName || os.hostname()}`);
+  console.log(`  Address     ${advertisedHost}:${config.port}`);
+  const others = addresses.filter((a) => a.address !== advertisedHost);
+  if (others.length > 0) {
+    console.log(`  Also on     ${others.map((a) => `${a.address} (${a.name})`).join(", ")}`);
+  }
+  console.log(`  Token       ${config.token}`);
+  console.log(`  Workspace   ${config.activeWorkspace}`);
+  console.log(`  Agent CLI   ${agent.commandPath ?? "not found - prompts need the Antigravity CLI (agy)"}`);
+  console.log(`  IDE         ${ide.installed ? (ide.isRunning ? "installed, running" : "installed") : "not found"}`);
+  console.log(`  Config      ${CONFIG_PATH}`);
+  console.log(line);
+  console.log("  Scan this code with the Antigravity Remote app:");
+  console.log("");
+  qrcode.generate(payload, { small: true }, (code) => console.log(code));
+  console.log(`  Manual entry: ${advertisedHost}  port ${config.port}  token above`);
+  console.log("  Press Ctrl+C to stop.");
+  console.log(line);
+}
+
+void start();
+
+const shutdown = (): void => {
+  clearInterval(statusHeartbeat);
+  agent.shutdown("bridge stopping");
+  terminal.stop();
+  server.close();
+  process.exit(0);
+};
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);

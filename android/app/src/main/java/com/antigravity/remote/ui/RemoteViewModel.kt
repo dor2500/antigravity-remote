@@ -1,18 +1,21 @@
 package com.antigravity.remote.ui
 
 import android.app.Application
+import android.net.ConnectivityManager
+import android.net.Network
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.antigravity.remote.data.BridgeClient
 import com.antigravity.remote.data.BridgeStatus
+import com.antigravity.remote.data.Channel
 import com.antigravity.remote.data.ConnectionPreferences
 import com.antigravity.remote.data.ConnectionProfile
 import com.antigravity.remote.data.ConnectionStatus
 import com.antigravity.remote.data.FileContent
 import com.antigravity.remote.data.FileEntry
 import com.antigravity.remote.data.LogEntry
+import com.antigravity.remote.data.PermissionRequest
 import com.antigravity.remote.data.WorkspaceItem
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,99 +29,108 @@ data class RemoteUiState(
     val savedProfile: ConnectionProfile? = null,
     val activeProfile: ConnectionProfile? = null,
     val bridgeStatus: BridgeStatus = BridgeStatus(),
-    val logs: List<LogEntry> = emptyList(),
+    val agentLogs: List<LogEntry> = emptyList(),
+    val terminalLogs: List<LogEntry> = emptyList(),
+    val permission: PermissionRequest? = null,
     val workspaces: List<WorkspaceItem> = emptyList(),
     val currentFilePath: String = "",
     val fileEntries: List<FileEntry> = emptyList(),
     val filesLoading: Boolean = false,
     val openedFile: FileContent? = null,
     val toastMessage: String? = null
-)
+) {
+    val isOnline: Boolean
+        get() = connectionStatus == ConnectionStatus.CONNECTED || connectionStatus == ConnectionStatus.RECONNECTING
+}
+
+private const val MAX_LOG_ENTRIES = 800
 
 class RemoteViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs = ConnectionPreferences(application)
     private val _uiState = MutableStateFlow(RemoteUiState(savedProfile = prefs.getSavedProfile()))
     val uiState: StateFlow<RemoteUiState> = _uiState.asStateFlow()
 
-    private val client = BridgeClient(
-        scope = viewModelScope,
-        onConnectionStateChanged = { status, error ->
-            _uiState.update {
-                it.copy(
-                    connectionStatus = status,
-                    connectionError = error
-                )
+    private val client = BridgeClient(viewModelScope, object : BridgeClient.Listener {
+        override fun onConnectionState(status: ConnectionStatus, error: String?) {
+            val wasConnected = _uiState.value.connectionStatus == ConnectionStatus.CONNECTED
+            _uiState.update { it.copy(connectionStatus = status, connectionError = error) }
+            if (status == ConnectionStatus.CONNECTED && !wasConnected) {
+                loadWorkspaces()
+                loadFiles(_uiState.value.currentFilePath)
             }
-            if (status == ConnectionStatus.CONNECTED) {
+        }
+
+        override fun onStatus(status: BridgeStatus) {
+            val previous = _uiState.value.bridgeStatus.activeWorkspace
+            _uiState.update { it.copy(bridgeStatus = status) }
+            if (previous.isNotEmpty() && previous != status.activeWorkspace) {
                 loadWorkspaces()
                 loadFiles("")
             }
-        },
-        onStatusUpdated = { newStatus ->
-            _uiState.update { state ->
-                val merged = state.bridgeStatus.copy(
-                    hostname = newStatus.hostname.ifEmpty { state.bridgeStatus.hostname },
-                    activeWorkspace = newStatus.activeWorkspace.ifEmpty { state.bridgeStatus.activeWorkspace },
-                    workspaceName = newStatus.workspaceName.ifEmpty { state.bridgeStatus.workspaceName },
-                    running = newStatus.running,
-                    activeCommand = newStatus.activeCommand,
-                    antigravityRunning = newStatus.antigravityRunning
-                )
-                state.copy(bridgeStatus = merged)
-            }
-        },
-        onLogReceived = { entry ->
-            _uiState.update { state ->
-                val updated = (state.logs + entry).takeLast(600)
-                state.copy(logs = updated)
-            }
-        },
-        onLogsCleared = {
-            _uiState.update { it.copy(logs = emptyList()) }
         }
-    )
+
+        override fun onLog(entry: LogEntry) {
+            _uiState.update { state ->
+                when (entry.channel) {
+                    Channel.AGENT -> state.copy(agentLogs = append(state.agentLogs, entry))
+                    Channel.TERMINAL -> state.copy(terminalLogs = append(state.terminalLogs, entry))
+                }
+            }
+        }
+
+        override fun onClear(channel: Channel) {
+            _uiState.update {
+                when (channel) {
+                    Channel.AGENT -> it.copy(agentLogs = emptyList())
+                    Channel.TERMINAL -> it.copy(terminalLogs = emptyList())
+                }
+            }
+        }
+
+        override fun onPermission(request: PermissionRequest?) {
+            if (_uiState.value.permission != request) _uiState.update { it.copy(permission = request) }
+        }
+    })
+
+    private val connectivity = application.getSystemService(ConnectivityManager::class.java)
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            client.reconnectNow()
+        }
+    }
 
     init {
-        // Auto-reconnect to saved profile on launch if available
-        prefs.getSavedProfile()?.let { saved ->
-            connect(saved)
-        }
+        runCatching { connectivity?.registerDefaultNetworkCallback(networkCallback) }
+        prefs.getSavedProfile()?.let { connect(it) }
     }
 
     fun connect(profile: ConnectionProfile) {
         prefs.saveProfile(profile)
-        _uiState.update {
-            it.copy(
-                savedProfile = profile,
-                activeProfile = profile,
-                connectionError = null
-            )
-        }
+        _uiState.update { it.copy(savedProfile = profile, activeProfile = profile, connectionError = null) }
         client.connect(profile)
     }
 
-    fun connectFromQrPayload(rawQr: String): Boolean {
-        return try {
-            val json = JSONObject(rawQr)
-            val ip = json.getString("ip")
-            val port = json.optInt("port", 8765)
-            val token = json.getString("token")
-            connect(ConnectionProfile(host = ip, port = port, token = token))
-            true
-        } catch (_: Exception) {
-            _uiState.update { it.copy(connectionError = "Invalid QR code format") }
-            false
+    /** Accepts the bridge QR payload: {"ip": "...", "port": 8765, "token": "..."}. */
+    fun connectFromQrPayload(raw: String): Boolean {
+        val profile = runCatching {
+            val json = JSONObject(raw.trim())
+            ConnectionProfile(
+                host = json.getString("ip").trim(),
+                port = json.optInt("port", 8765),
+                token = json.getString("token").trim()
+            )
+        }.getOrNull()
+        if (profile == null || profile.host.isEmpty() || profile.token.isEmpty()) {
+            _uiState.update { it.copy(connectionError = "That QR code is not an Antigravity Remote pairing code") }
+            return false
         }
+        connect(profile)
+        return true
     }
 
     fun disconnect() {
         client.disconnect()
-        _uiState.update {
-            it.copy(
-                connectionStatus = ConnectionStatus.DISCONNECTED,
-                activeProfile = null
-            )
-        }
+        _uiState.update { it.copy(activeProfile = null, permission = null) }
     }
 
     fun clearSavedProfile() {
@@ -126,84 +138,83 @@ class RemoteViewModel(application: Application) : AndroidViewModel(application) 
         _uiState.update { it.copy(savedProfile = null) }
     }
 
+    fun onAppForeground() {
+        client.reconnectNow()
+    }
+
     fun sendPrompt(prompt: String) {
         if (prompt.isBlank()) return
-        viewModelScope.launch(Dispatchers.IO) {
-            client.sendPrompt(prompt).onFailure { err ->
-                showToast(err.message ?: "Failed to send prompt")
-            }
+        viewModelScope.launch {
+            client.sendPrompt(prompt).onFailure { toast(it.message ?: "Could not send the prompt") }
         }
     }
 
     fun runTerminalCommand(command: String) {
         if (command.isBlank()) return
-        viewModelScope.launch(Dispatchers.IO) {
-            client.runTerminalCommand(command).onFailure { err ->
-                showToast(err.message ?: "Command failed")
-            }
+        viewModelScope.launch {
+            client.runTerminal(command).onFailure { toast(it.message ?: "Command failed") }
         }
     }
 
-    fun sendAction(action: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            client.sendAction(action).onFailure { err ->
-                showToast(err.message ?: "Action failed")
-            }
+    fun sendTerminalInput(text: String) {
+        viewModelScope.launch {
+            client.sendTerminalInput(text).onFailure { toast(it.message ?: "Could not send input") }
+        }
+    }
+
+    fun sendAction(action: String, target: Channel = Channel.AGENT) {
+        viewModelScope.launch {
+            client.sendAction(action, target).onFailure { toast(it.message ?: "Action failed") }
+        }
+    }
+
+    fun openInIde(path: String? = null) {
+        viewModelScope.launch {
+            client.openInIde(path)
+                .onSuccess { toast("Opened in Antigravity IDE") }
+                .onFailure { toast(it.message ?: "Could not open the IDE") }
         }
     }
 
     fun loadWorkspaces() {
-        viewModelScope.launch(Dispatchers.IO) {
-            client.fetchWorkspaces().onSuccess { list ->
-                _uiState.update { it.copy(workspaces = list) }
-            }
+        viewModelScope.launch {
+            client.fetchWorkspaces().onSuccess { list -> _uiState.update { it.copy(workspaces = list) } }
         }
     }
 
     fun switchWorkspace(path: String) {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             client.switchWorkspace(path)
                 .onSuccess {
                     loadWorkspaces()
                     loadFiles("")
-                    showToast("Workspace switched")
                 }
-                .onFailure { err ->
-                    showToast(err.message ?: "Failed to switch workspace")
-                }
+                .onFailure { toast(it.message ?: "Could not switch workspace") }
         }
     }
 
     fun loadFiles(relativePath: String) {
         _uiState.update { it.copy(filesLoading = true, currentFilePath = relativePath) }
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             client.fetchFiles(relativePath)
-                .onSuccess { entries ->
-                    _uiState.update { it.copy(fileEntries = entries, filesLoading = false) }
-                }
+                .onSuccess { entries -> _uiState.update { it.copy(fileEntries = entries, filesLoading = false) } }
                 .onFailure { err ->
                     _uiState.update { it.copy(filesLoading = false) }
-                    showToast(err.message ?: "Failed to list files")
+                    toast(err.message ?: "Could not list files")
                 }
         }
     }
 
     fun navigateUpDirectory() {
         val current = _uiState.value.currentFilePath
-        if (current.isEmpty()) return
-        val parent = current.substringBeforeLast("/", "")
-        loadFiles(parent)
+        if (current.isNotEmpty()) loadFiles(current.substringBeforeLast('/', ""))
     }
 
     fun openFile(relativePath: String) {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             client.readFile(relativePath)
-                .onSuccess { content ->
-                    _uiState.update { it.copy(openedFile = content) }
-                }
-                .onFailure { err ->
-                    showToast(err.message ?: "Failed to read file")
-                }
+                .onSuccess { content -> _uiState.update { it.copy(openedFile = content) } }
+                .onFailure { toast(it.message ?: "Could not read the file") }
         }
     }
 
@@ -211,16 +222,27 @@ class RemoteViewModel(application: Application) : AndroidViewModel(application) 
         _uiState.update { it.copy(openedFile = null) }
     }
 
-    fun showToast(message: String) {
-        _uiState.update { it.copy(toastMessage = message) }
-    }
-
     fun consumeToast() {
         _uiState.update { it.copy(toastMessage = null) }
     }
 
-    override fun onCleared() {
-        super.onCleared()
-        client.disconnect()
+    private fun toast(message: String) {
+        _uiState.update { it.copy(toastMessage = message) }
     }
+
+    override fun onCleared() {
+        runCatching { connectivity?.unregisterNetworkCallback(networkCallback) }
+        client.disconnect()
+        super.onCleared()
+    }
+}
+
+/** Appends a log entry, merging fragments that belong to the same streamed message. */
+private fun append(list: List<LogEntry>, entry: LogEntry): List<LogEntry> {
+    val last = list.lastOrNull()
+    if (entry.streamId != null && last != null && last.streamId == entry.streamId) {
+        return list.dropLast(1) + last.copy(message = last.message + entry.message)
+    }
+    val next = list + entry
+    return if (next.size > MAX_LOG_ENTRIES) next.takeLast(MAX_LOG_ENTRIES) else next
 }

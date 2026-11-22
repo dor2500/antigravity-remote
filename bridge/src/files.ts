@@ -17,6 +17,11 @@ const IGNORED_DIRS = new Set([
   ".idea",
   "__pycache__",
   ".next",
+  ".venv",
+  "venv",
+  ".vs",
+  "target",
+  "obj",
 ]);
 
 function resolveSafePath(workspaceRoot: string, relativePath: string): string {

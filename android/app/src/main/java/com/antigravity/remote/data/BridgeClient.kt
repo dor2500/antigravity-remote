@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -12,310 +13,282 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import org.json.JSONArray
 import org.json.JSONObject
+import java.io.IOException
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
+/**
+ * Talks to the Windows bridge: REST for commands, one WebSocket for the live event stream.
+ * Reconnects with backoff until [disconnect] is called.
+ */
 class BridgeClient(
     private val scope: CoroutineScope,
-    private val onConnectionStateChanged: (ConnectionStatus, String?) -> Unit,
-    private val onStatusUpdated: (BridgeStatus) -> Unit,
-    private val onLogReceived: (LogEntry) -> Unit,
-    private val onLogsCleared: () -> Unit
+    private val listener: Listener
 ) {
-    private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
+    interface Listener {
+        fun onConnectionState(status: ConnectionStatus, error: String?)
+        fun onStatus(status: BridgeStatus)
+        fun onLog(entry: LogEntry)
+        fun onClear(channel: Channel)
+        fun onPermission(request: PermissionRequest?)
+    }
+
+    private val http = OkHttpClient.Builder()
+        .connectTimeout(6, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
         .writeTimeout(10, TimeUnit.SECONDS)
-        .pingInterval(20, TimeUnit.SECONDS)
+        .pingInterval(15, TimeUnit.SECONDS)
         .build()
 
-    private var currentProfile: ConnectionProfile? = null
-    private var webSocket: WebSocket? = null
-    private var manualDisconnect = false
+    private val json = "application/json; charset=utf-8".toMediaType()
+    private val ids = AtomicLong(1L)
+
+    @Volatile private var profile: ConnectionProfile? = null
+    @Volatile private var socket: WebSocket? = null
+    @Volatile private var wanted = false
+    @Volatile private var everConnected = false
     private var reconnectJob: Job? = null
-    private val logIdCounter = AtomicLong(1L)
-    private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+    private var attempt = 0
 
-    fun connect(profile: ConnectionProfile) {
-        manualDisconnect = false
+    val activeProfile: ConnectionProfile? get() = profile
+
+    fun connect(target: ConnectionProfile) {
+        wanted = true
+        everConnected = false
+        attempt = 0
+        profile = target
         reconnectJob?.cancel()
-        currentProfile = profile
-        onConnectionStateChanged(ConnectionStatus.CONNECTING, null)
-
+        socket?.cancel()
+        listener.onConnectionState(ConnectionStatus.CONNECTING, null)
         scope.launch(Dispatchers.IO) {
-            val statusResult = fetchStatus(profile)
-            if (statusResult.isSuccess) {
-                statusResult.getOrNull()?.let { onStatusUpdated(it) }
-                openWebSocket(profile)
-            } else {
-                val msg = statusResult.exceptionOrNull()?.message ?: "Unable to reach bridge server"
-                onConnectionStateChanged(ConnectionStatus.DISCONNECTED, msg)
-            }
+            fetchStatus(target)
+                .onSuccess { status ->
+                    listener.onStatus(status)
+                    openSocket(target)
+                }
+                .onFailure { err ->
+                    wanted = false
+                    profile = null
+                    listener.onConnectionState(ConnectionStatus.DISCONNECTED, describe(err))
+                }
         }
     }
 
-    fun disconnect() {
-        manualDisconnect = true
+    /** Skip the backoff wait, e.g. when the network comes back or the app returns to the foreground. */
+    fun reconnectNow() {
+        val target = profile ?: return
+        if (!wanted || !everConnected || socket != null) return
         reconnectJob?.cancel()
-        webSocket?.close(1000, "User disconnected")
-        webSocket = null
-        currentProfile = null
-        onConnectionStateChanged(ConnectionStatus.DISCONNECTED, null)
+        attempt = 0
+        openSocket(target)
     }
 
-    private fun openWebSocket(profile: ConnectionProfile) {
-        webSocket?.cancel()
-        val request = Request.Builder().url(profile.wsUrl).build()
-        webSocket = httpClient.newWebSocket(request, object : WebSocketListener() {
+    fun disconnect() {
+        wanted = false
+        reconnectJob?.cancel()
+        socket?.close(1000, "Disconnected by user")
+        socket = null
+        profile = null
+        listener.onConnectionState(ConnectionStatus.DISCONNECTED, null)
+    }
+
+    private fun openSocket(target: ConnectionProfile) {
+        val request = Request.Builder().url(target.wsUrl).build()
+        socket = http.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                onConnectionStateChanged(ConnectionStatus.CONNECTED, null)
+                if (profile != target) return
+                attempt = 0
+                everConnected = true
+                listener.onConnectionState(ConnectionStatus.CONNECTED, null)
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                handleWsMessage(text)
+                if (profile == target) handleEvent(text)
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                 webSocket.close(1000, null)
                 if (code == 4001) {
-                    manualDisconnect = true
-                    onConnectionStateChanged(ConnectionStatus.DISCONNECTED, "Invalid auth token")
+                    wanted = false
+                    profile = null
+                    listener.onConnectionState(ConnectionStatus.DISCONNECTED, "The bridge rejected the token. Scan the QR code again.")
                 }
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                if (!manualDisconnect) {
-                    scheduleReconnect()
-                } else {
-                    onConnectionStateChanged(ConnectionStatus.DISCONNECTED, null)
-                }
+                lost(webSocket, target, null)
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                if (!manualDisconnect) {
-                    scheduleReconnect(t.message)
-                } else {
-                    onConnectionStateChanged(ConnectionStatus.DISCONNECTED, t.message)
-                }
+                lost(webSocket, target, describe(t))
             }
         })
     }
 
-    private fun scheduleReconnect(reason: String? = null) {
-        val profile = currentProfile ?: return
-        if (manualDisconnect) return
-        onConnectionStateChanged(ConnectionStatus.RECONNECTING, reason)
+    private fun lost(webSocket: WebSocket, target: ConnectionProfile, reason: String?) {
+        if (socket === webSocket) socket = null
+        if (!wanted || profile != target) return
+        listener.onConnectionState(ConnectionStatus.RECONNECTING, reason)
+        val wait = (1000L shl attempt.coerceAtMost(3)).coerceAtMost(8000L)
+        attempt += 1
         reconnectJob?.cancel()
         reconnectJob = scope.launch(Dispatchers.IO) {
-            delay(2500)
-            if (!manualDisconnect && currentProfile == profile) {
-                openWebSocket(profile)
-            }
+            delay(wait)
+            if (wanted && profile == target && socket == null) openSocket(target)
         }
     }
 
-    private fun handleWsMessage(raw: String) {
-        try {
-            val json = JSONObject(raw)
-            val type = json.optString("type")
-            val timestamp = json.optString("timestamp", "")
-            when (type) {
-                "log", "terminal_exit", "workspace_changed" -> {
-                    val message = json.optString("message", "")
-                    val level = json.optString("level", "system")
-                    if (message.isNotEmpty()) {
-                        onLogReceived(
-                            LogEntry(
-                                id = logIdCounter.getAndIncrement(),
-                                level = level,
-                                message = message,
-                                timestamp = formatTimestamp(timestamp)
-                            )
-                        )
-                    }
-                    if (type == "workspace_changed") {
-                        val data = json.optJSONObject("data")
-                        if (data != null) {
-                            onStatusUpdated(
-                                BridgeStatus(
-                                    activeWorkspace = data.optString("activeWorkspace", ""),
-                                    workspaceName = data.optString("workspaceName", "")
-                                )
-                            )
-                        }
-                    }
-                }
-                "status" -> {
-                    val data = json.optJSONObject("data") ?: return
-                    onStatusUpdated(
-                        BridgeStatus(
-                            hostname = data.optString("hostname", ""),
-                            activeWorkspace = data.optString("activeWorkspace", ""),
-                            workspaceName = data.optString("workspaceName", ""),
-                            running = data.optBoolean("running", false),
-                            activeCommand = data.optString("activeCommand", "").takeIf { it.isNotEmpty() },
-                            antigravityRunning = data.optBoolean("antigravityRunning", false)
-                        )
+    private fun handleEvent(raw: String) {
+        val event = runCatching { JSONObject(raw) }.getOrNull() ?: return
+        val channel = Channel.from(event.optString("channel"))
+        when (event.optString("type")) {
+            "log" -> {
+                if (channel == null) return
+                listener.onLog(
+                    LogEntry(
+                        id = ids.getAndIncrement(),
+                        channel = channel,
+                        level = event.optString("level", "system"),
+                        message = event.optString("message", ""),
+                        timestamp = clock(event.optString("timestamp")),
+                        streamId = event.optString("streamId").takeIf { it.isNotEmpty() }
                     )
-                }
-                "clear" -> onLogsCleared()
-            }
-        } catch (_: Exception) {
-            // Ignore malformed JSON frames
-        }
-    }
-
-    private fun formatTimestamp(iso: String): String {
-        val tIndex = iso.indexOf('T')
-        return if (tIndex != -1 && iso.length >= tIndex + 9) {
-            iso.substring(tIndex + 1, tIndex + 9)
-        } else {
-            ""
-        }
-    }
-
-    private fun authorizedRequest(profile: ConnectionProfile, path: String): Request.Builder {
-        return Request.Builder()
-            .url("${profile.baseUrl}$path")
-            .header("Authorization", "Bearer ${profile.token}")
-    }
-
-    suspend fun fetchStatus(profile: ConnectionProfile? = currentProfile): Result<BridgeStatus> {
-        val p = profile ?: return Result.failure(IllegalStateException("Not connected"))
-        return runCatching {
-            val req = authorizedRequest(p, "/api/status").get().build()
-            httpClient.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) {
-                    val msg = if (resp.code == 401) "Unauthorized (check token)" else "HTTP ${resp.code}"
-                    error(msg)
-                }
-                val json = JSONObject(resp.body?.string().orEmpty())
-                BridgeStatus(
-                    hostname = json.optString("hostname", ""),
-                    activeWorkspace = json.optString("activeWorkspace", ""),
-                    workspaceName = json.optString("workspaceName", ""),
-                    running = json.optBoolean("running", false),
-                    activeCommand = json.optString("activeCommand", "").takeIf { it.isNotEmpty() },
-                    antigravityRunning = json.optBoolean("antigravityRunning", false)
                 )
             }
+            "status" -> event.optJSONObject("data")?.let { listener.onStatus(parseStatus(it)) }
+            "clear" -> channel?.let { listener.onClear(it) }
+            "permission" -> event.optJSONObject("data")?.let { listener.onPermission(parsePermission(it)) }
+            "permission_resolved" -> listener.onPermission(null)
         }
     }
 
-    suspend fun sendPrompt(prompt: String): Result<Unit> {
-        val p = currentProfile ?: return Result.failure(IllegalStateException("Not connected"))
-        return runCatching {
-            val body = JSONObject().put("prompt", prompt).toString().toRequestBody(jsonMediaType)
-            val req = authorizedRequest(p, "/api/prompt").post(body).build()
-            httpClient.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) error("Failed (${resp.code})")
+    suspend fun fetchStatus(target: ConnectionProfile? = profile): Result<BridgeStatus> = call(target) { p ->
+        get(p, "/api/status") { parseStatus(it) }
+    }
+
+    suspend fun sendPrompt(prompt: String): Result<String> = call { p ->
+        post(p, "/api/prompt", JSONObject().put("prompt", prompt)) { it.optString("mode") }
+    }
+
+    suspend fun runTerminal(command: String): Result<Unit> = call { p ->
+        post(p, "/api/terminal", JSONObject().put("command", command)) { }
+    }
+
+    suspend fun sendTerminalInput(text: String): Result<Unit> = call { p ->
+        post(p, "/api/terminal/input", JSONObject().put("text", text)) { }
+    }
+
+    suspend fun sendAction(action: String, target: Channel = Channel.AGENT): Result<String> = call { p ->
+        post(p, "/api/action", JSONObject().put("action", action).put("target", target.wire)) { it.optString("detail") }
+    }
+
+    suspend fun openInIde(path: String? = null): Result<Unit> = call { p ->
+        post(p, "/api/ide/open", JSONObject().apply { if (path != null) put("path", path) }) { }
+    }
+
+    suspend fun fetchWorkspaces(): Result<List<WorkspaceItem>> = call { p ->
+        get(p, "/api/workspaces") { body ->
+            body.optJSONArray("workspaces").objects().map {
+                WorkspaceItem(it.getString("path"), it.getString("name"), it.optBoolean("active"))
             }
         }
     }
 
-    suspend fun runTerminalCommand(command: String): Result<Unit> {
-        val p = currentProfile ?: return Result.failure(IllegalStateException("Not connected"))
-        return runCatching {
-            val body = JSONObject().put("command", command).toString().toRequestBody(jsonMediaType)
-            val req = authorizedRequest(p, "/api/terminal").post(body).build()
-            httpClient.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) {
-                    val errText = resp.body?.string().orEmpty()
-                    error("HTTP ${resp.code}: $errText")
+    suspend fun switchWorkspace(path: String): Result<Unit> = call { p ->
+        post(p, "/api/workspaces/switch", JSONObject().put("path", path)) { }
+    }
+
+    suspend fun fetchFiles(relativePath: String): Result<List<FileEntry>> = call { p ->
+        get(p, "/api/files?path=${URLEncoder.encode(relativePath, "UTF-8")}") { body ->
+            body.optJSONArray("entries").objects().map {
+                FileEntry(it.getString("name"), it.getString("path"), it.getBoolean("isDirectory"), it.optLong("size"))
+            }
+        }
+    }
+
+    suspend fun readFile(relativePath: String): Result<FileContent> = call { p ->
+        get(p, "/api/files/read?path=${URLEncoder.encode(relativePath, "UTF-8")}") {
+            FileContent(it.getString("path"), it.getString("content"), it.optBoolean("truncated"), it.optLong("size"))
+        }
+    }
+
+    private suspend fun <T> call(target: ConnectionProfile? = profile, block: (ConnectionProfile) -> T): Result<T> {
+        val p = target ?: return Result.failure(IllegalStateException("Not connected"))
+        return withContext(Dispatchers.IO) { runCatching { block(p) } }
+    }
+
+    private fun <T> get(p: ConnectionProfile, path: String, parse: (JSONObject) -> T): T =
+        execute(request(p, path).get().build(), parse)
+
+    private fun <T> post(p: ConnectionProfile, path: String, body: JSONObject, parse: (JSONObject) -> T): T =
+        execute(request(p, path).post(body.toString().toRequestBody(json)).build(), parse)
+
+    private fun request(p: ConnectionProfile, path: String): Request.Builder =
+        Request.Builder().url(p.baseUrl + path).header("Authorization", "Bearer ${p.token}")
+
+    private fun <T> execute(request: Request, parse: (JSONObject) -> T): T {
+        http.newCall(request).execute().use { response ->
+            val text = response.body?.string().orEmpty()
+            val body = runCatching { JSONObject(text) }.getOrElse { JSONObject() }
+            if (!response.isSuccessful) {
+                val message = body.optString("error").ifEmpty {
+                    if (response.code == 401) "Token rejected by the bridge" else "HTTP ${response.code}"
                 }
+                throw IOException(message)
             }
+            return parse(body)
         }
     }
 
-    suspend fun sendAction(action: String): Result<Unit> {
-        val p = currentProfile ?: return Result.failure(IllegalStateException("Not connected"))
-        return runCatching {
-            val body = JSONObject().put("action", action).toString().toRequestBody(jsonMediaType)
-            val req = authorizedRequest(p, "/api/action").post(body).build()
-            httpClient.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) error("Action failed (${resp.code})")
-            }
-        }
+    private fun parseStatus(data: JSONObject): BridgeStatus {
+        val agent = data.optJSONObject("agent") ?: JSONObject()
+        val terminal = data.optJSONObject("terminal") ?: JSONObject()
+        val ide = data.optJSONObject("ide") ?: JSONObject()
+        agent.optJSONObject("permission").let { listener.onPermission(it?.let(::parsePermission)) }
+        return BridgeStatus(
+            version = data.optString("version"),
+            hostname = data.optString("hostname"),
+            activeWorkspace = data.optString("activeWorkspace"),
+            workspaceName = data.optString("workspaceName"),
+            agent = AgentInfo(
+                available = agent.optBoolean("available"),
+                state = AgentState.from(agent.optString("state")),
+                title = agent.optNullableString("title"),
+                queued = agent.optInt("queued"),
+                lastError = agent.optNullableString("lastError")
+            ),
+            terminalRunning = terminal.optBoolean("running"),
+            terminalCommand = terminal.optNullableString("command"),
+            terminalCwd = terminal.optString("cwd"),
+            ideInstalled = ide.optBoolean("installed"),
+            ideRunning = ide.optBoolean("running")
+        )
     }
 
-    suspend fun fetchWorkspaces(): Result<List<WorkspaceItem>> {
-        val p = currentProfile ?: return Result.failure(IllegalStateException("Not connected"))
-        return runCatching {
-            val req = authorizedRequest(p, "/api/workspaces").get().build()
-            httpClient.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) error("HTTP ${resp.code}")
-                val json = JSONObject(resp.body?.string().orEmpty())
-                val arr = json.optJSONArray("workspaces") ?: return@use emptyList()
-                buildList {
-                    for (i in 0 until arr.length()) {
-                        val obj = arr.getJSONObject(i)
-                        add(
-                            WorkspaceItem(
-                                path = obj.getString("path"),
-                                name = obj.getString("name"),
-                                active = obj.optBoolean("active", false)
-                            )
-                        )
-                    }
-                }
-            }
-        }
+    private fun parsePermission(data: JSONObject) = PermissionRequest(
+        title = data.optString("title", "Agent action"),
+        kind = data.optString("kind", "other"),
+        detail = data.optString("detail")
+    )
+
+    private fun describe(err: Throwable): String = when (err) {
+        is java.net.ConnectException -> "Cannot reach the bridge. Is it running, and is the phone on the same network?"
+        is java.net.SocketTimeoutException -> "The bridge did not answer in time"
+        is java.net.UnknownHostException -> "Unknown host"
+        else -> err.message ?: err.javaClass.simpleName
     }
 
-    suspend fun switchWorkspace(path: String): Result<Unit> {
-        val p = currentProfile ?: return Result.failure(IllegalStateException("Not connected"))
-        return runCatching {
-            val body = JSONObject().put("path", path).toString().toRequestBody(jsonMediaType)
-            val req = authorizedRequest(p, "/api/workspaces/switch").post(body).build()
-            httpClient.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) error("HTTP ${resp.code}")
-            }
-        }
-    }
-
-    suspend fun fetchFiles(relativePath: String = ""): Result<List<FileEntry>> {
-        val p = currentProfile ?: return Result.failure(IllegalStateException("Not connected"))
-        return runCatching {
-            val encoded = URLEncoder.encode(relativePath, "UTF-8")
-            val req = authorizedRequest(p, "/api/files?path=$encoded").get().build()
-            httpClient.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) error("HTTP ${resp.code}")
-                val json = JSONObject(resp.body?.string().orEmpty())
-                val arr = json.optJSONArray("entries") ?: return@use emptyList()
-                buildList {
-                    for (i in 0 until arr.length()) {
-                        val obj = arr.getJSONObject(i)
-                        add(
-                            FileEntry(
-                                name = obj.getString("name"),
-                                path = obj.getString("path"),
-                                isDirectory = obj.getBoolean("isDirectory"),
-                                size = obj.optLong("size", 0L)
-                            )
-                        )
-                    }
-                }
-            }
-        }
-    }
-
-    suspend fun readFile(relativePath: String): Result<FileContent> {
-        val p = currentProfile ?: return Result.failure(IllegalStateException("Not connected"))
-        return runCatching {
-            val encoded = URLEncoder.encode(relativePath, "UTF-8")
-            val req = authorizedRequest(p, "/api/files/read?path=$encoded").get().build()
-            httpClient.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) error("HTTP ${resp.code}")
-                val json = JSONObject(resp.body?.string().orEmpty())
-                FileContent(
-                    path = json.getString("path"),
-                    content = json.getString("content"),
-                    truncated = json.optBoolean("truncated", false),
-                    size = json.optLong("size", 0L)
-                )
-            }
-        }
+    private fun clock(iso: String): String {
+        val t = iso.indexOf('T')
+        return if (t >= 0 && iso.length >= t + 9) iso.substring(t + 1, t + 9) else ""
     }
 }
+
+private fun JSONArray?.objects(): List<JSONObject> =
+    if (this == null) emptyList() else (0 until length()).mapNotNull { optJSONObject(it) }
+
+private fun JSONObject.optNullableString(key: String): String? =
+    if (isNull(key)) null else optString(key).takeIf { it.isNotEmpty() }
